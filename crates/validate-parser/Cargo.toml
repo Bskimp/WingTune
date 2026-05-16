@@ -1,0 +1,15 @@
+[package]
+name = "validate-parser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for golden-log corpus regression validation"
+
+[[bin]]
+name = "validate-parser"
+path = "src/main.rs"
+
+[dependencies]
+wingtune-parser = { path = "../wingtune-parser" }

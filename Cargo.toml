@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/wingtune-parser",
+    "crates/validate-parser",
+]
+
+# Point WingTune at the Bskimp/blackbox-log:wing-support fork for as long as
+# Betaflight 2025.12+ date-versioned firmware support has not landed upstream.
+# When the upstream PR merges and a new crates.io version ships, bump the
+# `blackbox-log = "..."` dep in the member crates and delete this block.
+[patch.crates-io]
+blackbox-log = { git = "https://github.com/Bskimp/blackbox-log", branch = "wing-support" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Bskimp/WingTune"
