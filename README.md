@@ -2,7 +2,7 @@
 
 A browser-first log analysis tool for the fixed-wing side of Betaflight.
 
-**Status:** Early development. Design complete; no code yet.
+**Status:** Early development. M1.1 scaffold landed; M1.2 (WASM wrapper + capability report) is next.
 
 ## Why this exists
 
@@ -29,7 +29,34 @@ WingTune is a from-scratch analytics and visualization layer for that regime. Re
 
 ## Status
 
-Pre-code. Design docs are reviewed and locked; M1.0 has not started. The immediate first step is the parser-support scratch test — see [docs/wingtune-m1-execution.md](docs/wingtune-m1-execution.md) section "M1.0 → Parser support track."
+- **M1.0 parser-support track:** firmware-version fix landed on the `Bskimp/blackbox-log:wing-support` fork. Upstream PR drafted, not yet opened. Wing-launch debug-mode YAML follow-up gated on BF PR [#15121](https://github.com/betaflight/betaflight/pull/15121).
+- **M1.0 corpus assembly track:** not started.
+- **M1.1 scaffold:** complete (Cargo workspace, WASM pipeline, Vue + Vite + Tailwind 4, Layer 1 worker + wasmBridge, Tauri 2.x shell, vitest + WASM-binding tests, GitHub Actions CI, devcontainer).
+- **M1.2 (WASM wrapper + capability report) is next.**
+
+## Local dev
+
+One-time setup:
+
+```bash
+rustup install stable             # Rust toolchain (matches rust-toolchain.toml)
+cargo install wasm-pack --locked  # compiles wingtune-parser to WASM
+npm install                       # JS deps
+```
+
+Common commands:
+
+```bash
+npm run dev               # Vite dev server (browser target) → http://localhost:5173
+npm run tauri:dev         # same app inside a Tauri 2.x desktop window
+npm run build             # vue-tsc + production build → dist/
+npm run tauri:build       # desktop bundle (per-OS)
+npm run test:unit         # vitest unit specs
+npm run test:wasm         # rebuilds Node-target WASM, runs binding smoke
+npm run corpus:validate   # validate-parser CLI against tests/corpus/manifest.yaml
+```
+
+A VS Code devcontainer is provided at [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json) for the web-target stack (Rust + Node + wasm-pack). Tauri desktop-shell dev requires host system deps (webkit2gtk-4.1 on Linux, WebView2 on Windows) and is intentionally not bundled into the container.
 
 ## Where to start reading
 

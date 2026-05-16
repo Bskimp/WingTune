@@ -7,29 +7,35 @@
 
 ## Status
 
-Pre-code. Design docs are reviewed and locked through v0.9 (roadmap) /
-rev 11 (M1 execution). No source code yet — no `package.json`, no
-`crates/`, no `src/`. The repo currently contains design docs, project
-skills, firmware-PR artifacts, and tooling configs only.
+Design docs locked through v0.9 (roadmap) / rev 11 (M1 execution).
 
-**Immediate next step when resuming work:** the M1.0 **parser-support
-scratch test** — a 30-minute `cargo new bbl-test` + decode a real
-BF 2025/2026 wing log via `blackbox-log::File::new(bytes).iter().next()`
-to confirm the failure mode. The result scopes the upstream PR work.
-See `docs/wingtune-m1-execution.md` → "M1.0 → Parser support track" for
-the full operational plan.
+**Done:**
 
-**Order of work after the scratch test:**
+- M1.0 parser-support track: firmware-version fix committed on the
+  `Bskimp/blackbox-log:wing-support` fork (commits `bdb0eb5` + `a07ff76`).
+  Upstream PR drafted, not yet opened (Brian's call). See the
+  `project-parser-scratch-test-result` memory.
+- M1.1 scaffold: Cargo workspace + `crates/wingtune-parser` (WASM via
+  wasm-bindgen + wasm-pack) + `crates/validate-parser`, Vite 8 + Vue 3.5
+  + TS 6 + Pinia 3 + Tailwind 4 frontend, Layer 1 worker + wasmBridge,
+  Tauri 2.11 desktop shell, vitest + WASM-binding tests, GitHub Actions
+  CI (ubuntu rust/js + windows tauri-check), `.devcontainer/`.
 
-1. Fork `blackbox-log/blackbox-log` to `Bskimp/blackbox-log`, branch
-   `wing-support`. Add BF 4.6+ firmware coverage.
-2. Open the upstream PR in parallel (not a gate).
-3. Scaffold M1.1 with `[patch.crates-io]` pointing at the fork branch.
-4. Proceed M1.1 → M1.2 → M1.3 → M1.4 → M1.5 → M1.6 → M1.7 normally.
-5. When (if) the PR merges: bump dep to the new crates.io version, delete
-   the patch override.
+**In flight / pending:**
 
-See `docs/wingtune-m1-execution.md` for the full M1 plan.
+- M1.0 corpus assembly track (not started). Candidate logs in
+  `C:\Users\Sista\Desktop\ng logs\` (see `reference-test-logs` memory).
+- Upstream `blackbox-log` PR open (held by Brian).
+- Wing-launch debug-mode YAML follow-up (waiting on BF
+  [PR #15121](https://github.com/betaflight/betaflight/pull/15121)
+  to merge — see `project-brian-wing-launch-debug-mode` memory).
+- M1.1.4 / M1.1.5 in-browser/desktop runtime smoke (compile + partial
+  Vite-serve smoke green from this session; full UI smoke pending a
+  non-remote-control session).
+
+**Immediate next step:** M1.2 — WASM wrapper + Worker (capability
+report + frame index, no field hydration). See
+`docs/wingtune-m1-execution.md` for the full spec.
 
 ## Cardinal rules
 

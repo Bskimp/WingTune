@@ -1,0 +1,44 @@
+{
+  "name": "WingTune dev",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24"
+    }
+  },
+  "remoteUser": "vscode",
+
+  // Install wasm-pack and project npm deps once on first container build.
+  // wasm-pack is a Rust binary we install via cargo install --locked.
+  // For Tauri 2 desktop-shell dev (`tauri dev`), additional system
+  // dependencies (webkit2gtk-4.1, libsoup-3, librsvg2-dev, patchelf) and
+  // GUI passthrough are required and intentionally NOT installed here —
+  // the devcontainer is scoped to web-target dev (browser + Vite + WASM).
+  // Do Tauri shell development on the host.
+  "postCreateCommand": "cargo install wasm-pack --locked && npm ci",
+
+  "forwardPorts": [5173, 1420],
+  "portsAttributes": {
+    "5173": {
+      "label": "Vite dev server",
+      "onAutoForward": "notify"
+    },
+    "1420": {
+      "label": "Tauri dev (not used in container — for parity with host)",
+      "onAutoForward": "silent"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "Vue.volar",
+        "bradlc.vscode-tailwindcss",
+        "vitest.explorer",
+        "tamasfe.even-better-toml",
+        "EditorConfig.EditorConfig"
+      ]
+    }
+  }
+}
