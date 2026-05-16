@@ -128,6 +128,28 @@ The mixer config (`DELTA` / `V_TAIL` / `CONVENTIONAL` / etc.) is in the headers 
 - **This design pass:** the SERVOS panel layout, saturation strips, mixer badge, mechanical-chain row in the filter budget, the visual language for "actuator is mechanical and slow." Pure Layer 3 work — Layer 1 already has the data.
 - **A later M2-class module (`M-Servo`):** measures dead band / slew rate / lag from rcCommand → motor[i] step responses, plots servo response degradation against airspeed, emits confidence-scored CLI recommendations ("right elevon shows 22 ms lag — consider lowering D-term by 15%"). Lives in Layer 2 / Layer 3 once the design language for servos is set.
 
+### Servo identification — three label states the SERVOS panel must handle
+
+**The problem:** most wing pilots use `MIXER_CUSTOM_AIRPLANE` and wire servos to whichever channels they prefer. The `smix` table that maps `rcCommand → output channel` lives in EEPROM, **not in the BBL header**, so the log itself doesn't directly tell us which channel is the left elevon, the rudder, etc.
+
+**Plan:** classify each `motor[i]` channel via (in order):
+
+1. **Preset lookup** — for BF mixer presets (`MIXER_AIRPLANE`, `MIXER_FLYING_WING`, `MIXER_V_TAIL_TRI`, etc.), the channel-to-role mapping is hardcoded in BF source and can be looked up. High confidence.
+2. **Correlation classifier** — for `MIXER_CUSTOM_AIRPLANE`, a Layer 2 module correlates each channel's PWM trajectory against `rcCommand[ROLL/PITCH/YAW]` and throttle to infer the role (high roll correlation + opposite-sign paired channel → Elevon-L / Elevon-R, etc.). Medium / low confidence based on correlation strength.
+3. **User override** — clickable label on the SERVOS panel → dropdown to manually reassign. Override persists keyed by `craft_name` so re-loading another log from the same craft keeps the labels.
+
+**Three label states to design for:**
+
+| State | Example label | Treatment | Interaction |
+|---|---|---|---|
+| Confident | `Elevon-L` | Standard | None needed (but click-to-override always available) |
+| Inferred low-confidence | `Elevon-L?` | Italic / dotted-underline indicator | Hover surfaces correlation evidence; click to confirm or reassign |
+| Unclassified | `Servo 4 · unknown` | Muted / secondary text style | Click → manual assignment dropdown |
+
+The SERVOS panel itself works in all three states — only the label changes. The traces, saturation strips, and rendering are role-agnostic.
+
+**M-Servo recommendation cards consume the same classification** — so a high-confidence rec uses `Elevon-L` in its title, a low-confidence rec uses `Servo 4 (likely elevon?)` and notes the inference in the body. Worth sketching one mock card with a low-confidence-labeled servo rec to validate the visual language extends to the uncertainty case.
+
 ## Recommend tab — visual language locked now, tab hidden until M2
 
 The first design pass produced a beautifully crafted Recommend tab with severity pills, confidence stamps, evidence-pinned cursor jumps, CLI copy blocks, and Dismiss / Mark applied actions. Walking through the six sample recommendations, all of them are derivable from BBL data the parser already exposes — none of it is aspirational. That tab is the right visual language for what M2-M7 will produce.
