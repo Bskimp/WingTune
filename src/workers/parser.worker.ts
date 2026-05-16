@@ -19,6 +19,11 @@ function ensureReady(): Promise<unknown> {
   return ready;
 }
 
+// Bytes are transferred from the main thread on `scan` and cached here so
+// `hydrate` can re-iterate the same log without a second main-thread →
+// worker copy. Replaced on every new scan.
+let logBytes: Uint8Array | null = null;
+
 // Request / response shapes — these MUST stay in sync with the matching
 // types in `src/lib/wasmBridge.ts`. The shared shapes live in the bridge
 // so Layer 2/3 has a single import surface; this file just dispatches
@@ -55,9 +60,16 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
 function dispatch(req: WorkerRequest): unknown {
   switch (req.type) {
     case 'scan':
+      // Stash the bytes for subsequent hydrate calls. After
+      // `postMessage`'s transfer the main thread no longer owns this
+      // buffer; the worker is now the source of truth for the log.
+      logBytes = req.bytes;
       return scanLog(req.bytes);
     case 'hydrate':
-      return wasmHydrate(req.fieldIds);
+      if (!logBytes) {
+        throw new Error('hydrate: no log loaded — call scan() first');
+      }
+      return wasmHydrate(logBytes, req.fieldIds);
     case 'info':
       return parser_info();
   }

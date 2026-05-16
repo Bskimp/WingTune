@@ -48,13 +48,22 @@ export type EventFrame =
 
 export interface ScanReport {
   capability: CapabilityReport;
-  time_sec: number[];
+  /** Log-time of each main frame, in seconds since the first frame. Always
+   *  delivered as a real `Float32Array` to Layer 2/3 (the worker returns
+   *  it as `number[]` via serde-wasm-bindgen; this bridge converts at the
+   *  Layer 1 boundary). Never let typed-array-shaped data live as a
+   *  plain `number[]` past this point. */
+  time_sec: Float32Array;
   events: EventFrame[];
   firmware_revision: string | null;
   firmware_date: string | null;
   board_info: string | null;
   craft_name: string | null;
 }
+
+/** Pre-conversion shape of `ScanReport` as it comes out of
+ *  serde-wasm-bindgen. Only `wasmBridge.scan()` should ever see this. */
+type RawScanReport = Omit<ScanReport, 'time_sec'> & { time_sec: number[] };
 
 export type ScanError =
   | { kind: 'no_logs' }
@@ -159,15 +168,35 @@ export class ParserClient {
     const bytes = handle.bytes;
     // Transfer the underlying ArrayBuffer so the worker doesn't copy. After
     // this call the caller's Uint8Array view is detached.
-    return call<ScanReport>(
+    const raw = await call<RawScanReport>(
       { type: 'scan', bytes },
       [bytes.buffer as ArrayBuffer],
     );
+    // Convert at the Layer 1 boundary so Layer 2/3 never sees `number[]`
+    // for typed-array-shaped data.
+    return { ...raw, time_sec: Float32Array.from(raw.time_sec) };
   }
 
-  /** Hydrate the named fields (M1.3). Currently rejects with the Rust-side
-   *  "not yet implemented" error; landing the impl is its own commit. */
+  /** Hydrate the named fields. Returns a `Map<name, Float32Array>` where
+   *  each entry is one field's value-per-frame. Requires a prior `scan()`
+   *  so the worker has the log bytes cached.
+   *
+   *  Fields not present in the log come back as empty `Float32Array`s
+   *  (callers should check `.length === 0` to distinguish from "field
+   *  exists but had no samples"). M1.3.2 re-iterates the full log per
+   *  call; the `FrameIndex` seek-skip optimization is a follow-up. */
   async hydrate(fieldIds: string[]): Promise<Map<string, Float32Array>> {
-    return call<Map<string, Float32Array>>({ type: 'hydrate', fieldIds });
+    const raw = await call<Array<[string, number[]]>>({
+      type: 'hydrate',
+      fieldIds,
+    });
+    // serde-wasm-bindgen renders Vec<(String, Vec<f32>)> as an array of
+    // [name, array] pairs. Convert each value array to Float32Array at
+    // the Layer 1 boundary so Layer 2/3 never sees plain `number[]`.
+    const out = new Map<string, Float32Array>();
+    for (const [name, values] of raw) {
+      out.set(name, Float32Array.from(values));
+    }
+    return out;
   }
 }

@@ -6,10 +6,12 @@
 
 pub mod capability;
 pub mod event;
+pub mod hydrate;
 pub mod scan;
 
 pub use capability::{CapabilityReport, FrameIndex, SampleCheck, VoltageSagSummary};
 pub use event::EventFrame;
+pub use hydrate::{hydrate as hydrate_impl, HydrateError};
 pub use scan::{scan, ScanError, ScanReport};
 
 use wasm_bindgen::prelude::*;
@@ -36,17 +38,23 @@ pub fn scan_log(bytes: &[u8]) -> Result<JsValue, JsValue> {
     }
 }
 
-/// Hydrate the named fields and return them to JS. Per the M1.3 architecture
-/// the worker tracks which fields are already resident and only re-decodes
-/// the missing set. M1.2.3 stubs this with a clear "not yet implemented"
-/// error so the wasmBridge / Pinia plumbing can be wired against the final
-/// API shape today; the seek-and-decode impl lands in M1.3.
+/// Hydrate the named fields and return them to JS. Bytes are re-iterated
+/// from the start; M1.3.2 doesn't use the `FrameIndex` seek hints yet.
+/// Returns `{ name → [f32, …] }` shape (object with array values) via
+/// serde-wasm-bindgen; the bridge converts to `Map<string, Float32Array>`.
 #[wasm_bindgen(js_name = hydrate)]
-pub fn hydrate(_field_ids: Vec<String>) -> Result<JsValue, JsValue> {
-    Err(JsValue::from_str(
-        "hydrate: not yet implemented (lands in M1.3 alongside the fielded \
-         lazy-hydration store)",
-    ))
+pub fn hydrate(bytes: &[u8], field_ids: Vec<String>) -> Result<JsValue, JsValue> {
+    match hydrate::hydrate(bytes, &field_ids) {
+        Ok(pairs) => {
+            // Build a Vec<(String, Vec<f32>)> — serde-wasm-bindgen renders
+            // this as a plain object `{ field_name: [...] }`. We don't use
+            // HashMap because field order matters to some callers.
+            serde_wasm_bindgen::to_value(&pairs)
+                .map_err(|e| JsValue::from_str(&format!("serialize hydrate: {e}")))
+        }
+        Err(err) => Err(serde_wasm_bindgen::to_value(&err)
+            .unwrap_or_else(|_| JsValue::from_str("hydrate: unserializable error"))),
+    }
 }
 
 #[cfg(test)]
@@ -151,6 +159,31 @@ mod tests {
             report.time_sec.last().copied().unwrap_or(0.0),
             report.capability.debug_mode,
             report.firmware_revision,
+        );
+
+        // M1.3.2: now hydrate the first three available main-frame fields
+        // and confirm we get sample-count equal to total_frames for each.
+        let sample_fields: Vec<String> =
+            report.capability.fields_present.iter().take(3).cloned().collect();
+        if sample_fields.is_empty() {
+            return;
+        }
+        let pairs = hydrate_impl(&bytes, &sample_fields).expect("hydrate");
+        assert_eq!(pairs.len(), sample_fields.len());
+        for (name, values) in &pairs {
+            assert_eq!(
+                values.len() as u64,
+                report.capability.total_frames,
+                "hydrated field {name} should have one sample per main frame"
+            );
+        }
+        eprintln!(
+            "hydrate(WINGTUNE_TEST_LOG): {} fields, first sample of each: {:?}",
+            pairs.len(),
+            pairs
+                .iter()
+                .map(|(n, v)| (n.as_str(), v.first().copied().unwrap_or(0.0)))
+                .collect::<Vec<_>>(),
         );
     }
 

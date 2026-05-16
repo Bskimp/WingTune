@@ -24,15 +24,16 @@ describe('wingtune-parser WASM (Node binding)', () => {
     expect((thrown as { kind?: string }).kind).toBe('no_logs');
   });
 
-  it('hydrate() rejects with the M1.3-not-implemented message', () => {
+  it('hydrate(empty bytes, …) rejects with a ScanError-shaped error', () => {
     let thrown: unknown;
     try {
-      hydrate(['axisP[0]']);
+      hydrate(new Uint8Array(), ['axisP[0]']);
     } catch (e) {
       thrown = e;
     }
-    // wasm-bindgen throws either the serialized JsValue or a string. The
-    // stub uses `JsValue::from_str(...)` so we get a plain string here.
-    expect(String(thrown)).toMatch(/not yet implemented/);
+    expect(thrown).toBeDefined();
+    // hydrate() returns the same NoLogs / InvalidHeaders variants as scan
+    // when given input it can't decode.
+    expect((thrown as { kind?: string }).kind).toBe('no_logs');
   });
 });
