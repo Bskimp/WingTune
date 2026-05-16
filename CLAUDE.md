@@ -27,26 +27,37 @@ Design docs locked through v0.9 (roadmap) / rev 11 (M1 execution).
   `scan(bytes)` impl returning capability + Float32 time axis + events;
   worker dispatches `scan` / `hydrate` / `info` requests with an ok/error
   envelope; `ParserClient` class in `wasmBridge.ts` is the only Layer 1
-  import surface for Layer 2/3. Hydrate is a typed stub awaiting M1.3.
+  import surface for Layer 2/3.
+- M1.3.1-3 (non-UI half): `src/lib/dtype.ts` helpers
+  (`concatFloat32`, `secondsFromMicros`, `float32ArrayBytes`); Float32
+  conversion at the wasmBridge boundary; real Rust `hydrate(bytes,
+  field_ids)` impl with `MainValue → f32` for Unsigned/Signed/Voltage/
+  Amperage/Acceleration/Rotation; worker caches log bytes after scan
+  so hydrate doesn't re-transfer; `useLogStore()` and `useViewStore()`
+  Pinia stores following `shallowRef`/`shallowReactive` discipline.
+  Real-log integration verified: `btfl_001.bbl` → 134307 frames, 64
+  fields, hydrate returns `axisP[0]=9, axisP[1]=-4` at the first sample.
 
 **In flight / pending:**
 
-- **M1.3 paused before component work for a Claude Design pass.** The
-  data layer is real (`scan()` produces a populated `ScanReport` from
-  Brian's actual flight logs); the UI is still the M1.2 smoke page.
-  Design pass goal is to mock the file-drop / capability-summary
-  surfaces before the M1.3.4 component commits.
+- **M1.3.4-5 paused for a Claude Design pass.** Everything except the
+  visual surfaces is built. The Pinia stores are populated with real
+  reactive state from `btfl_001.bbl` when `useLogStore().loadFile(file)`
+  is called — design can prototype against actual data shapes in dev
+  tools instead of TypeScript type defs. Components owned by the
+  design pass: `FileDropZone.vue`, `CapabilitySummary.vue`, App.vue
+  restructure. Also pending: scan progress streaming UX, LRU eviction
+  policy, Tauri `openSource(path)` command.
 - M1.0 corpus assembly track (not started).
 - Upstream `blackbox-log` PR open (held by Brian).
 - M1.1.4 / M1.1.5 / M1.2 in-browser / desktop runtime smoke (compile +
   partial Vite-serve smoke green; full UI smoke pending a non-remote-control session).
 
-**Immediate next step when resuming code work:** M1.3 — file drop +
-scan UI + lazy hydration. Sub-plan sketched and held: dtype helpers
-(M1.3.1), real Rust hydrate impl (M1.3.2), Pinia log/view stores
-(M1.3.3), components informed by the design pass (M1.3.4),
-integration test (M1.3.5). See `docs/wingtune-m1-execution.md` for the
-full M1.3 spec.
+**Immediate next step when resuming code work:** M1.3.4 — file drop +
+capability summary components, informed by the design pass. Store API
+is already in place at `src/stores/log.ts` (`loadFile`, `ensureFields`,
+`scanning`, `scanError`, `scanReport`, `time`, `fields`, `events`,
+`firmwareRevision`, etc.).
 
 ## Cardinal rules
 

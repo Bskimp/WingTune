@@ -2,7 +2,7 @@
 
 A browser-first log analysis tool for the fixed-wing side of Betaflight.
 
-**Status:** Early development. M1.1 scaffold + M1.2 WASM wrapper landed; M1.3 (file drop + lazy hydration UI) paused before component work for a design pass.
+**Status:** Early development. M1.1 scaffold + M1.2 WASM wrapper + M1.3.1-3 data layer landed; M1.3.4-5 (file drop + capability summary components) paused for a Claude Design pass.
 
 ## Why this exists
 
@@ -32,8 +32,9 @@ WingTune is a from-scratch analytics and visualization layer for that regime. Re
 - **M1.0 parser-support track:** firmware-version fix + speculative `WING_LAUNCH` debug-mode YAML landed on the `Bskimp/blackbox-log:wing-support` fork. Real BF 2026.6.0-alpha wing logs decode end-to-end through the WingTune parser. Upstream PR drafted, not yet opened.
 - **M1.0 corpus assembly track:** not started.
 - **M1.1 scaffold:** complete (Cargo workspace, WASM pipeline, Vue + Vite + Tailwind 4, Layer 1 worker + wasmBridge, Tauri 2.x shell, vitest + WASM-binding tests, GitHub Actions CI, devcontainer).
-- **M1.2 WASM wrapper + Worker:** complete. `ParserClient.scan()` returns a populated `ScanReport` from real wing logs (capability report, Float32 time axis, event list). `hydrate()` is a typed stub awaiting M1.3.
-- **M1.3 file drop UI + lazy hydration:** *paused before component work for a Claude Design pass*. Data layer is real; the visible app is still the M1.2 smoke page.
+- **M1.2 WASM wrapper + Worker:** complete. `ParserClient.scan()` returns a populated `ScanReport` from real wing logs (capability report, Float32 time axis, event list).
+- **M1.3.1-3 (non-UI data layer):** complete. `src/lib/dtype.ts` helpers, Float32 conversion at the wasmBridge boundary, real Rust `hydrate(bytes, field_ids)`, `useLogStore()` + `useViewStore()` Pinia stores following `shallowRef`/`shallowReactive` discipline. Verified end-to-end on a real wing log.
+- **M1.3.4-5 (file drop + capability summary components):** *paused for a Claude Design pass*. Pinia stores are populated with real reactive state from `loadFile()`; the visible app is still the M1.2 smoke page until the design pass returns.
 
 ## Local dev
 
