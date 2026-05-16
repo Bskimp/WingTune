@@ -12,7 +12,7 @@
     "dev": "npm run wasm:build && vite",
     "build": "npm run wasm:build && vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run --exclude='tests/wasm-binding/**' --exclude='**/node_modules/**' --exclude='**/.git/**'",
     "test:wasm": "npm run wasm:build:node && vitest run tests/wasm-binding",
     "corpus:validate": "cargo run --release --manifest-path crates/validate-parser/Cargo.toml -- --manifest tests/corpus/manifest.yaml"
   },
