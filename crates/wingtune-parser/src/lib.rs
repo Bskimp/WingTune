@@ -15,12 +15,38 @@ pub use scan::{scan, ScanError, ScanReport};
 use wasm_bindgen::prelude::*;
 
 /// One-line description of the underlying parser. Retained from the M1.1
-/// smoke as a diagnostic endpoint — the real scan/hydrate surface lands
-/// in M1.2.2+.
+/// smoke as a diagnostic endpoint — the real scan/hydrate surface is below.
 #[wasm_bindgen]
 pub fn parser_info() -> String {
     let _file = blackbox_log::File::new(&[]);
     format!("wingtune-parser {}", env!("CARGO_PKG_VERSION"))
+}
+
+/// JS-callable scan entry point. Bytes are moved into Rust via wasm-bindgen
+/// (`Box<[u8]>` transfers ownership without copying). Returns the full
+/// `ScanReport` on success or a structured `ScanError` envelope on failure;
+/// both are marshalled to plain JS objects via `serde-wasm-bindgen`.
+#[wasm_bindgen(js_name = scanLog)]
+pub fn scan_log(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    match scan::scan(bytes) {
+        Ok(report) => serde_wasm_bindgen::to_value(&report)
+            .map_err(|e| JsValue::from_str(&format!("serialize ScanReport: {e}"))),
+        Err(err) => Err(serde_wasm_bindgen::to_value(&err)
+            .unwrap_or_else(|_| JsValue::from_str("scan: unserializable error"))),
+    }
+}
+
+/// Hydrate the named fields and return them to JS. Per the M1.3 architecture
+/// the worker tracks which fields are already resident and only re-decodes
+/// the missing set. M1.2.3 stubs this with a clear "not yet implemented"
+/// error so the wasmBridge / Pinia plumbing can be wired against the final
+/// API shape today; the seek-and-decode impl lands in M1.3.
+#[wasm_bindgen(js_name = hydrate)]
+pub fn hydrate(_field_ids: Vec<String>) -> Result<JsValue, JsValue> {
+    Err(JsValue::from_str(
+        "hydrate: not yet implemented (lands in M1.3 alongside the fielded \
+         lazy-hydration store)",
+    ))
 }
 
 #[cfg(test)]
