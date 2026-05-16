@@ -1,8 +1,19 @@
-# WingTune M1 — Execution plan (rev 11)
+# WingTune M1 — Execution plan (rev 12)
 
 > Foundation milestone. Desktop-first (Tauri) + hosted-demo log analysis tool for Betaflight wings. Load a wing blackbox log, scan it off the main thread via a Rust parser compiled to WASM, build a capability report + frame index, lazily hydrate fields per workspace, render scrubbable time-series with event annotations, and classify the log's analysis readiness using a **source-agnostic signal registry** that resolves each wing-tuning signal against either the new main-frame `USE_WING` fields (BF 2026.6+) or the pre-PR debug-mode channels. Multi-log support (M1.7) folds into existing surfaces — no separate "campaign" UI. No analysis modules yet — those start at M2.
 
-## Changes from rev 10
+## Changes from rev 11 → rev 12
+
+- **Servos are first-class actuators, not motors.** The biggest single difference between wing and quad tuning. BF wing builds repurpose `motor[i]` to carry servo PWM (mixer config in headers gives the channel mapping). Several M1 surfaces become servo-aware:
+  - M1.4 third workspace renamed to **"Servo outputs"** (was effectively "Motor outputs"), using `motor[0..N]` as servo PWM traces labeled by mixer assignment (`Elevon-L`, `Elevon-R`, `Rudder`, `Throttle`).
+  - Per-axis (R/P/Y) plots gain **servo saturation strips** — translucent red whenever any contributing servo hit endpoint deflection.
+  - Filter delay budget panel (lands with M4) gains a **`Mechanical chain` row** alongside the electronic filter chain (servo response time as its own line summing into the OVER BUDGET check). Wing tuning is often gated by servo lag rather than filter lag.
+  - Header strip gets a **mixer badge** (`DELTA · 2 elevons + throttle`, etc.) next to CONTROLLER.
+  - A future M-Servo analytics module (post-M1) will measure servo dead band, slew rate, lag, and airspeed-loaded response — emits its own confidence-scored CLI recs.
+- **Recommend tab visual language locked in M1.3.4 design pass, infrastructure in M1.4, tab hidden until M2 first ships content.** Components built shell-only against a uniform `ConfidenceResult<T>` shape: `RecommendCard`, `RecommendList`, `ConfidenceStamp`, `EvidenceChip`. The `CursorProvider` shared-cursor mechanic (click an evidence chip → every plot pins to that moment) is implemented in M1.4 because it's cross-cutting (Tracking / Spectrum / Step / Recommend all use it), not Recommend-tab-only. Domain chips: `all / SPA / TPA / Filters / PID / Servo`. **The Recommend tab is hidden from the top tab bar until any M2+ module emits a single rec** — empty tabs read as broken; hidden reads as "feature doesn't exist yet."
+- **First Claude Design pass (2026-05-16) produced mocks at `claude.ai/design/p/019e310e-a05e-7105-a26c-b2459f06da2f`** capturing the Tracking / Spectrum / Recommend tabs with the chip strip (CONTROLLER / TPA / SPA / DEBUG / PHASES), wing overlays (SPA factor, TPA factor, error), filter delay budget with OVER BUDGET badge, step-response panel, PID contribution with `-P -I D -F -S` chips, and 6 sample recommendation cards grounded in derivable BBL data. All six samples map to real M2-M7 modules — no aspirational content. See `docs/design-handoff.md` for the brief that produced this output.
+
+## Changes from rev 10 → rev 11 (carried forward)
 
 - **M1.0 expanded** to include a **Parser support track**: fork `blackbox-log` to `Bskimp/blackbox-log`, add BF 4.6+ firmware coverage on a `wing-support` branch, open an upstream PR in parallel, point WingTune at the fork via Cargo patch override. **Not a gate** — WingTune development against the fork starts at M1.1.
 - Timing reframed: 4–6 weeks of WingTune work *plus* 1–2 weeks of parallel parser-support effort. Adds effort, not calendar time.
@@ -649,6 +660,15 @@ A second uPlot row (or a thin overlay band) renders event-frame markers from `lo
 | Sync beep / logging start | event-frame stream | Faint tick |
 
 Hover surfaces `{ type, timestamp_s, label }` in a tooltip. The event track shares the scrub-window X axis with the main time-series (`cursor: { sync: ... }` in uPlot). Implementation lives in `components/EventTrack.vue`, with the marker derivation in `lib/eventFrames.ts` (unit-tested via vitest — given a synthetic event-frame array, assert the marker list).
+
+### Shared cursor + recommend-tab infrastructure (added during M1.4)
+
+Two cross-cutting pieces land alongside the time-series so M2+ analytics modules and the eventual Recommend tab slot in cleanly:
+
+- **`CursorProvider`** (in `stores/view.ts`) — holds `{ t: number | null, pinned: boolean, source: string | null }`. uPlot panels read it (sync cursor across all plots), event-chip clicks call `setCursorT(t) + setPinned(true)`, and navigating tabs preserves the pin. The Recommend tab's evidence chips (built later) use the same `setCursorT` to jump every other tab to the moment a recommendation is grounded in.
+- **`RecommendCard` / `RecommendList` shell** (`components/RecommendCard.vue`, `components/RecommendList.vue`) — built shell-only against a uniform `ConfidenceResult<T>` shape: severity pill, confidence stamp, title + summary + delta badge, expandable details, CLI block with confidence-gated copy button, dismiss / mark-applied actions. No content wired in M1.4. M2+ modules emit recs into the list; the **`Recommend` tab is hidden from the top tab bar until the rec list is non-empty.**
+
+Domain chip set on the Recommend list: `all / SPA / TPA / Filters / PID / Servo` (M-Servo gets its own domain peer, per the servo-first-class decision — recs there use mixer-channel labels like `Elevon-L` rather than axis indices).
 
 ## M1.5 — Header inspector + wing detection with confidence
 

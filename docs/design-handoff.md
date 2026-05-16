@@ -128,6 +128,45 @@ The mixer config (`DELTA` / `V_TAIL` / `CONVENTIONAL` / etc.) is in the headers 
 - **This design pass:** the SERVOS panel layout, saturation strips, mixer badge, mechanical-chain row in the filter budget, the visual language for "actuator is mechanical and slow." Pure Layer 3 work — Layer 1 already has the data.
 - **A later M2-class module (`M-Servo`):** measures dead band / slew rate / lag from rcCommand → motor[i] step responses, plots servo response degradation against airspeed, emits confidence-scored CLI recommendations ("right elevon shows 22 ms lag — consider lowering D-term by 15%"). Lives in Layer 2 / Layer 3 once the design language for servos is set.
 
+## Recommend tab — visual language locked now, tab hidden until M2
+
+The first design pass produced a beautifully crafted Recommend tab with severity pills, confidence stamps, evidence-pinned cursor jumps, CLI copy blocks, and Dismiss / Mark applied actions. Walking through the six sample recommendations, all of them are derivable from BBL data the parser already exposes — none of it is aspirational. That tab is the right visual language for what M2-M7 will produce.
+
+The plan for it:
+
+1. **Lock the visual language now in M1.3.4 / M1.4.** Components: `RecommendCard` (severity pill + confidence stamp + title + summary + delta badge + expand/details + CLI copy block + dismiss/applied), `RecommendList` (filter by severity bucket / by domain chip / sorted by severity), `ConfidenceStamp`, `EvidenceChip`. These are reusable infrastructure — every M2+ module's output slots into them.
+2. **Implement the evidence-pinned cursor mechanic as cross-cutting infrastructure in M1.4** (alongside the charts). `CursorProvider` state holds `{ t: number, pinned: boolean, source: string }`. Charts, the Recommend tab, the Step tab, the Spectrum tab all read from it. Clicking an evidence chip anywhere calls `setCursorT(t) + setPinned(true)`; navigating to another tab keeps the pin. This is not a Recommend-tab-only feature — it's how the user navigates a flight forensically.
+3. **Hide the Recommend tab entirely until M2 ships the first analytics module.** No empty-state placeholder, no "coming soon" — the tab simply doesn't appear in the top tab bar. Empty tabs read as a broken feature; a hidden tab reads as "this feature doesn't exist yet, the app you do see works." The tab appears the moment any M2+ module emits a single rec.
+4. **Domain chip set:** `all / SPA / TPA / Filters / PID / Servo`. The mock has SPA/TPA/Filters/PID — add `Servo` as a peer (M-Servo module will be a major rec producer, see the servos section above).
+
+### Sample-rec → analytics-module mapping (for grounding)
+
+Each sample on the mock corresponds to a real M-class module. Listing the mapping so the design isn't designing in the abstract:
+
+| Sample rec on the mock | Maps to module | Data it consumes |
+|---|---|---|
+| "Enable SPA on yaw" (rudder kicks + I-windup) | M3 SPA fit | `rcCommand[2]`, `gyroADC[2]`, `axisI[2]` |
+| "Increase TPA speed-est delay" (throttle ↔ osc cross-corr) | M3 TPA fit | throttle, `gyroADC`, airspeed (if sensor present) |
+| "Dynamic notch missing 47 Hz airframe peak" | M4 spectrum / dyn-notch tracker analysis | `gyroADC` FFT, `DEBUG_DYN_NOTCH` |
+| "Loosen D-term LPF1" (saves 0.7 ms) | M4 filter delay budget | filter config from headers, D-spectrum |
+| "Roll D on low side" (step-response overshoot) | M2 PIDFS decomposition | setpoint, gyro, step detection |
+| "Filter chain inside wing budget" | M4 filter delay budget | filter config |
+
+A future rec like "right elevon dead band > 4°" maps to M-Servo (see servos section). The visual card shape is the same for all of them.
+
+### Design questions to resolve in this pass
+
+1. **Tab visibility binary or count-bubbled?** Plan above hides tab until first rec exists. Alternative: tab always present with a count bubble (`Recommend ·  0` → `Recommend · 6`). The hidden-until-ready path is what the doc currently calls for, but it's worth a design opinion.
+2. **Per-axis grouping toggle** — mock currently sorts by severity. Adding a "group by axis" toggle is cheap; design-pass call on whether it earns the chrome.
+3. **Confidence stamp placement** — the rotated stamp on the card is striking; check it scales gracefully on narrow widths (Tauri windows on small laptops).
+4. **Servo recs need a card variant** — same component, but with mixer-channel labeling (`Elevon-L`, not `axis R`) and possibly an inline servo trace mini-chart. Worth sketching one mock card with a servo rec to validate the visual language extends cleanly.
+
+### Things deliberately not in scope for design
+
+- **Apply-via-CLI auto-stage** (writing a staged-changes file the user dumps into BF Configurator) — that's a real-app feature with Tauri-side file system involvement, lands post-M1 alongside the actual M2+ module that produces the recs.
+- **Persist dismissed via localStorage + undo** — yes, in the real Vue app. Keyed by log SHA so dismissals are per-log, not global. M1.6 or M1.7 alongside session persistence.
+- **The actual recommendation generation** — that's M2 (PIDFS) → M3 (SPA/TPA) → M4 (filters) → eventual M-Servo. The design's sample content is predictive of what those modules will produce, not stubs to be wired into the M1 UI.
+
 ## Questions worth thinking about
 
 1. **What's the relationship between the loaded-log header (firmware/craft) and the analysis surfaces?** Always-on top strip? Collapsible? Sidebar?
