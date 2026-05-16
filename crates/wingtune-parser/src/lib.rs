@@ -10,7 +10,7 @@ pub mod scan;
 
 pub use capability::{CapabilityReport, FrameIndex, SampleCheck, VoltageSagSummary};
 pub use event::EventFrame;
-pub use scan::ScanReport;
+pub use scan::{scan, ScanError, ScanReport};
 
 use wasm_bindgen::prelude::*;
 
@@ -82,6 +82,50 @@ mod tests {
         assert!(json.contains("\"kind\":\"flight_mode_change\""), "got: {json}");
         let back: Vec<EventFrame> = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.len(), events.len());
+    }
+
+    #[test]
+    fn scan_on_empty_bytes_returns_no_logs_error() {
+        let err = scan(&[]).expect_err("empty bytes should not scan");
+        assert!(
+            matches!(err, ScanError::NoLogs),
+            "expected NoLogs, got {err:?}"
+        );
+    }
+
+    /// Run `scan()` against a real BBL file specified via the
+    /// `WINGTUNE_TEST_LOG` environment variable. Skipped silently when
+    /// the var isn't set so CI (no real logs in the public corpus yet)
+    /// stays green.
+    #[test]
+    fn scan_real_log_when_env_var_set() {
+        let Ok(path) = std::env::var("WINGTUNE_TEST_LOG") else {
+            eprintln!("skipped: set WINGTUNE_TEST_LOG=<path> to run");
+            return;
+        };
+        let bytes = std::fs::read(&path).expect("read test log");
+        let report = scan(&bytes).expect("scan");
+        assert!(report.capability.total_frames > 0, "no frames decoded");
+        assert!(
+            !report.capability.fields_present.is_empty(),
+            "no fields_present"
+        );
+        assert!(!report.time_sec.is_empty(), "empty time axis");
+        assert_eq!(
+            report.time_sec.len(),
+            report.capability.total_frames as usize,
+            "time axis length must equal frame count"
+        );
+        eprintln!(
+            "scan(WINGTUNE_TEST_LOG): frames={} fields={} events={} duration={:.2}s \
+             debug_mode={:?} firmware={:?}",
+            report.capability.total_frames,
+            report.capability.fields_present.len(),
+            report.events.len(),
+            report.time_sec.last().copied().unwrap_or(0.0),
+            report.capability.debug_mode,
+            report.firmware_revision,
+        );
     }
 
     #[test]

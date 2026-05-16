@@ -47,7 +47,12 @@ pub struct SampleCheck {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FrameIndex {
-    /// Byte offset of each seek point in the original log bytes.
+    /// Seek-point identifier for each entry. In M1.2 this is the
+    /// main-frame iteration count (the monotonic `iteration` field on
+    /// each `MainFrame`) because `blackbox-log` doesn't expose the
+    /// parser's current byte position. M1.3's hydrate path uses this
+    /// to fast-forward when re-decoding fields. Will switch to true
+    /// byte offsets if/when the upstream parser exposes them.
     pub offsets: Vec<u64>,
     /// Log-time (seconds since first frame) at each seek point, parallel
     /// to `offsets`. Time axis is f32 because the dtype rule is
