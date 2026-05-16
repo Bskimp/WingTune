@@ -11,31 +11,42 @@ Design docs locked through v0.9 (roadmap) / rev 11 (M1 execution).
 
 **Done:**
 
-- M1.0 parser-support track: firmware-version fix committed on the
-  `Bskimp/blackbox-log:wing-support` fork (commits `bdb0eb5` + `a07ff76`).
-  Upstream PR drafted, not yet opened (Brian's call). See the
-  `project-parser-scratch-test-result` memory.
+- M1.0 parser-support track: firmware-version fix + speculative
+  `WING_LAUNCH` YAML landed on `Bskimp/blackbox-log:wing-support`
+  (commits `bdb0eb5` → `a07ff76` → `0e66887`). Brian's real wing logs
+  (`btfl_001.bbl`, etc.) now decode end-to-end through the WingTune
+  parser. Upstream PR drafted, not yet opened (Brian's call). See
+  `project-parser-scratch-test-result` + `project-brian-wing-launch-debug-mode`.
 - M1.1 scaffold: Cargo workspace + `crates/wingtune-parser` (WASM via
   wasm-bindgen + wasm-pack) + `crates/validate-parser`, Vite 8 + Vue 3.5
   + TS 6 + Pinia 3 + Tailwind 4 frontend, Layer 1 worker + wasmBridge,
   Tauri 2.11 desktop shell, vitest + WASM-binding tests, GitHub Actions
   CI (ubuntu rust/js + windows tauri-check), `.devcontainer/`.
+- M1.2 WASM wrapper + Worker: typed `ScanReport` / `CapabilityReport` /
+  `EventFrame` / `ScanError` shapes both Rust- and TS-side; real
+  `scan(bytes)` impl returning capability + Float32 time axis + events;
+  worker dispatches `scan` / `hydrate` / `info` requests with an ok/error
+  envelope; `ParserClient` class in `wasmBridge.ts` is the only Layer 1
+  import surface for Layer 2/3. Hydrate is a typed stub awaiting M1.3.
 
 **In flight / pending:**
 
-- M1.0 corpus assembly track (not started). Candidate logs in
-  `C:\Users\Sista\Desktop\ng logs\` (see `reference-test-logs` memory).
+- **M1.3 paused before component work for a Claude Design pass.** The
+  data layer is real (`scan()` produces a populated `ScanReport` from
+  Brian's actual flight logs); the UI is still the M1.2 smoke page.
+  Design pass goal is to mock the file-drop / capability-summary
+  surfaces before the M1.3.4 component commits.
+- M1.0 corpus assembly track (not started).
 - Upstream `blackbox-log` PR open (held by Brian).
-- Wing-launch debug-mode YAML follow-up (waiting on BF
-  [PR #15121](https://github.com/betaflight/betaflight/pull/15121)
-  to merge — see `project-brian-wing-launch-debug-mode` memory).
-- M1.1.4 / M1.1.5 in-browser/desktop runtime smoke (compile + partial
-  Vite-serve smoke green from this session; full UI smoke pending a
-  non-remote-control session).
+- M1.1.4 / M1.1.5 / M1.2 in-browser / desktop runtime smoke (compile +
+  partial Vite-serve smoke green; full UI smoke pending a non-remote-control session).
 
-**Immediate next step:** M1.2 — WASM wrapper + Worker (capability
-report + frame index, no field hydration). See
-`docs/wingtune-m1-execution.md` for the full spec.
+**Immediate next step when resuming code work:** M1.3 — file drop +
+scan UI + lazy hydration. Sub-plan sketched and held: dtype helpers
+(M1.3.1), real Rust hydrate impl (M1.3.2), Pinia log/view stores
+(M1.3.3), components informed by the design pass (M1.3.4),
+integration test (M1.3.5). See `docs/wingtune-m1-execution.md` for the
+full M1.3 spec.
 
 ## Cardinal rules
 
