@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust workspace (check + test + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+      - name: cargo test
+        run: cargo test --workspace --all-targets
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  js:
+    name: Frontend (vue-tsc + vite build + vitest + WASM smoke + corpus)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Distinct key from the `rust` job so the caches don't fight over
+          # the same `target/` (this job's wasm32 builds add a different
+          # target triple to the directory).
+          key: js-job
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Production build (wasm:build + vue-tsc + vite build)
+        run: npm run build
+
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+
+      - name: WASM-binding tests (vitest + wasm-pack nodejs)
+        run: npm run test:wasm
+
+      - name: Corpus validate (validate-parser CLI)
+        run: npm run corpus:validate
+
+  tauri-check:
+    # Compile the Tauri 2.x desktop shell on the same OS the user develops
+    # on. Catches webview2-com / tao breakage that wouldn't surface on a
+    # Linux-only matrix. Cheap relative to a full `tauri build` since this
+    # only `cargo check`s the shell.
+    name: Tauri shell (cargo check on Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: tauri-shell
+
+      - name: cargo check (src-tauri)
+        working-directory: src-tauri
+        run: cargo check
