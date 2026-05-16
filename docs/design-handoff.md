@@ -1,8 +1,28 @@
 # WingTune — Design handoff
 
-> **Transient doc.** Paste this into a Claude Design conversation to brief
-> it on the project. Delete this file when the M1.3.4 components land so
-> it doesn't go stale once the visual language is implemented.
+> **Transient doc.** Originally the brief paste-into-Claude-Design used to
+> seed the M1.3.4-5 design pass. Now also tracks the decisions made off
+> the bundle that came back. Delete this file (and `design-reference/`)
+> when the M1.3.4 components land and the visual language is locked in
+> code.
+
+## Direction decision (locked 2026-05-16)
+
+**Direction C · Hangar Logbook, Blueprint palette.** Picked because (a)
+the analysis screens in the bundle already use C-Blueprint, so the entry
+page in the same palette avoids a visual whiplash; (b) the C structure
+(slab serif headings, `VERIFIED` rubber stamps, `MANIFEST · N ENTRIES`
+footer, signed-by-flight-signature) is the strongest identity for a
+wing-pilot tool — distinct from every quad analyzer; (c) the Blueprint
+palette swaps C's original warm walnut for cool dark navy, which reads
+trace data far better.
+
+Implementation reference for layout / tokens / panel structure lives at
+[`docs/design-reference/`](design-reference/) (Claude Design bundle,
+runnable JSX). Use the JSX as the source-of-truth for visual structure;
+the chopped trace-density look in the mocks is a mock-rendering artifact
+that resolves automatically when we wire uPlot (see the
+`project-chart-rendering-fidelity` memory).
 
 I'm building **WingTune**, a browser-first log analysis tool for the fixed-wing side of Betaflight (open-source flight controller firmware). Looking for help mocking up the first real UI surfaces before I commit to component code.
 
