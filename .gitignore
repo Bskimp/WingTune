@@ -45,3 +45,6 @@ Thumbs.db
 
 # But do ignore per-user VS Code state
 .vscode/.workspace.json
+
+# Per-user Claude Code permissions (the shared allowlist is .claude/settings.json)
+.claude/settings.local.json

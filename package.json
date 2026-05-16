@@ -1,0 +1,35 @@
+{
+  "name": "wingtune",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-first log analysis tool for the fixed-wing side of Betaflight",
+  "license": "GPL-3.0-or-later",
+  "repository": "github:Bskimp/WingTune",
+  "scripts": {
+    "wasm:build": "wasm-pack build crates/wingtune-parser --target web --out-dir ../../src/wasm/pkg",
+    "wasm:build:node": "wasm-pack build crates/wingtune-parser --target nodejs --out-dir ../../tests/wasm-binding/pkg",
+    "dev": "npm run wasm:build && vite",
+    "build": "npm run wasm:build && vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test:unit": "vitest run",
+    "test:wasm": "npm run wasm:build:node && vitest run tests/wasm-binding",
+    "corpus:validate": "cargo run --release --manifest-path crates/validate-parser/Cargo.toml -- --manifest tests/corpus/manifest.yaml"
+  },
+  "dependencies": {
+    "pinia": "^3.0.4",
+    "uplot": "^1.6.32",
+    "vue": "^3.5.34"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "@vue/tsconfig": "^0.9.1",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.13",
+    "vite-plugin-wasm": "^3.6.0",
+    "vitest": "^4.1.6",
+    "vue-tsc": "^3.2.9"
+  }
+}
