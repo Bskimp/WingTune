@@ -2,39 +2,63 @@
 //
 // This file and `src/lib/wasmBridge.ts` are the only places in the JS/TS
 // codebase that import from `src/wasm/pkg/`. Layer 2 (Analytics) and
-// Layer 3 (Vue UI) talk to the worker only via the typed message protocol
-// defined in `wasmBridge.ts`. See the `wingtune-architecture` skill.
+// Layer 3 (Vue UI) talk to the worker only via the typed protocol defined
+// in `wasmBridge.ts`. See the `wingtune-architecture` skill.
 
-import init, { parser_info } from '../wasm/pkg/wingtune_parser';
+import init, {
+  hydrate as wasmHydrate,
+  parser_info,
+  scanLog,
+} from '../wasm/pkg/wingtune_parser';
 
-// WASM init is async (fetches the .wasm, instantiates). We do it once and
-// cache the promise so subsequent requests await the same init.
+// WASM init is async (fetches the .wasm, instantiates). Done once, the
+// promise cached so subsequent requests await the same init.
 let ready: Promise<unknown> | null = null;
 function ensureReady(): Promise<unknown> {
   if (!ready) ready = init();
   return ready;
 }
 
-type WorkerRequest = { id: number; type: 'getInfo' };
+// Request / response shapes — these MUST stay in sync with the matching
+// types in `src/lib/wasmBridge.ts`. The shared shapes live in the bridge
+// so Layer 2/3 has a single import surface; this file just dispatches
+// against them.
+
+type ScanRequest = { id: number; type: 'scan'; bytes: Uint8Array };
+type HydrateRequest = { id: number; type: 'hydrate'; fieldIds: string[] };
+type InfoRequest = { id: number; type: 'info' };
+type WorkerRequest = ScanRequest | HydrateRequest | InfoRequest;
+
 type WorkerResponse =
-  | { id: number; type: 'info'; payload: string }
-  | { id: number; type: 'error'; error: string };
+  | { id: number; ok: true; payload: unknown }
+  | { id: number; ok: false; error: unknown };
 
 self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
   const req = event.data;
   try {
     await ensureReady();
-    switch (req.type) {
-      case 'getInfo': {
-        const info = parser_info();
-        const res: WorkerResponse = { id: req.id, type: 'info', payload: info };
-        self.postMessage(res);
-        break;
-      }
-    }
+    const payload = dispatch(req);
+    const res: WorkerResponse = { id: req.id, ok: true, payload };
+    self.postMessage(res);
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    const res: WorkerResponse = { id: req.id, type: 'error', error };
+    // `scanLog` / `hydrate` reject with structured ScanError objects when
+    // serialization succeeded on the Rust side; preserve those as-is so
+    // the caller can dispatch on `error.kind`. Real JS exceptions are
+    // normalized to `{ message }` for consistent rendering.
+    const error =
+      err instanceof Error ? { message: err.message } : (err as unknown);
+    const res: WorkerResponse = { id: req.id, ok: false, error };
     self.postMessage(res);
   }
 });
+
+function dispatch(req: WorkerRequest): unknown {
+  switch (req.type) {
+    case 'scan':
+      return scanLog(req.bytes);
+    case 'hydrate':
+      return wasmHydrate(req.fieldIds);
+    case 'info':
+      return parser_info();
+  }
+}
