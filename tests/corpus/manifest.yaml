@@ -1,0 +1,12 @@
+# WingTune golden-log corpus manifest.
+#
+# Every .bbl in tests/corpus/ has an entry here. See:
+#   - tests/corpus/README.md for the format summary
+#   - .claude/skills/wingtune-corpus-hygiene.md for the safety/scrubbing rules (no escape hatch)
+#   - docs/wingtune-m1-execution.md M1.0 section for the full manifest schema
+#
+# Empty at project start — entries land alongside their .bbl files during
+# M1.0 (corpus assembly track). The first entry should be a basic wing log
+# flagged `bundled: true` so the bundled sample is in place by M1.1.
+
+logs: []

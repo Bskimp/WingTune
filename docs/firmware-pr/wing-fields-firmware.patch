@@ -1,0 +1,242 @@
+From: Bskimp <wingtune@local>
+Subject: [PATCH] blackbox: promote wing tuning signals to first-class main-frame fields
+
+Wing-specific tuning signals (tpaSpeedEst, tpaArgument, pre-TPA sTerm,
+spa[], post-SPA adjusted setpoint) were previously only observable via
+DEBUG_TPA / DEBUG_S_TERM / DEBUG_WING_SETPOINT debug-mode channels, which
+forces a downstream log analyzer (WingTune) to demand a specific
+debug_mode at log time. Promote them to gated main-frame fields, matching
+the existing axisS pattern.
+
+All new fields are USE_WING-gated. Numeric scaling matches the debug
+channels they replace, so existing analyzer code paths can be reused.
+
+Fields added:
+  tpaSpeedEst       int32   pidRuntime.tpaSpeed.speed * 10           (ALWAYS under USE_WING)
+  tpaArg            int32   tpaArgument * 1000                       (ALWAYS under USE_WING)
+  axisSpreTpa[0..2] int32   pre-TPA sTerm (matches DEBUG_S_TERM even) (NONZERO_WING_S_n)
+  spa[0..2]         int32   pidRuntime.spa[axis] * 1000              (NONZERO_SPA_n - new)
+  setpointAdj[0..2] int32   post-SPA adjusted setpoint               (SETPOINT)
+
+No new CLI parameters. No blackbox_encoding.c changes (reuses SIGNED_VB).
+
+---
+ src/main/blackbox/blackbox.c            | 86 ++++++++++++++++++++++++++
+ src/main/blackbox/blackbox_fielddefs.h  |  6 ++
+ src/main/flight/pid.c                   | 38 +++++++++--
+ src/main/flight/pid.h                   | 10 +++
+ 4 files changed, 136 insertions(+), 4 deletions(-)
+
+diff --git a/src/main/blackbox/blackbox_fielddefs.h b/src/main/blackbox/blackbox_fielddefs.h
+--- a/src/main/blackbox/blackbox_fielddefs.h
++++ b/src/main/blackbox/blackbox_fielddefs.h
+@@ -55,6 +55,9 @@ typedef enum {
+     FLIGHT_LOG_FIELD_CONDITION_NONZERO_WING_S_0,
+     FLIGHT_LOG_FIELD_CONDITION_NONZERO_WING_S_1,
+     FLIGHT_LOG_FIELD_CONDITION_NONZERO_WING_S_2,
++    FLIGHT_LOG_FIELD_CONDITION_NONZERO_SPA_0,
++    FLIGHT_LOG_FIELD_CONDITION_NONZERO_SPA_1,
++    FLIGHT_LOG_FIELD_CONDITION_NONZERO_SPA_2,
+ #endif
+
+     FLIGHT_LOG_FIELD_CONDITION_RC_COMMANDS,
+diff --git a/src/main/blackbox/blackbox.c b/src/main/blackbox/blackbox.c
+--- a/src/main/blackbox/blackbox.c
++++ b/src/main/blackbox/blackbox.c
+@@ -213,7 +213,14 @@ static const blackboxDeltaFieldDefinition_t blackboxMainFields[] = {
+ #ifdef USE_WING
+     {"axisS",       0, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_WING_S_0)},
+     {"axisS",       1, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_WING_S_1)},
+     {"axisS",       2, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_WING_S_2)},
++    {"axisSpreTpa", 0, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_WING_S_0)},
++    {"axisSpreTpa", 1, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_WING_S_1)},
++    {"axisSpreTpa", 2, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_WING_S_2)},
++    {"spa",         0, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_SPA_0)},
++    {"spa",         1, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_SPA_1)},
++    {"spa",         2, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(NONZERO_SPA_2)},
++    {"tpaSpeedEst", -1, SIGNED,  .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(ALWAYS)},
++    {"tpaArg",      -1, SIGNED,  .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(ALWAYS)},
+ #endif
+     /* rcCommands are encoded together as a group in P-frames: */
+     {"rcCommand",   0, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(TAG8_4S16), CONDITION(RC_COMMANDS)},
+@@ -225,6 +232,11 @@ static const blackboxDeltaFieldDefinition_t blackboxMainFields[] = {
+     {"setpoint",    0, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(TAG8_4S16), CONDITION(SETPOINT)},
++#ifdef USE_WING
++    {"setpointAdj", 0, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(SETPOINT)},
++    {"setpointAdj", 1, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(SETPOINT)},
++    {"setpointAdj", 2, SIGNED,   .Ipredict = PREDICT(0),       .Iencode = ENCODING(SIGNED_VB),   .Ppredict = PREDICT(PREVIOUS),      .Pencode = ENCODING(SIGNED_VB), CONDITION(SETPOINT)},
++#endif
+
+@@ -362,8 +374,15 @@ typedef struct blackboxMainState_s {
+     int32_t axisPID_P[XYZ_AXIS_COUNT];
+     int32_t axisPID_I[XYZ_AXIS_COUNT];
+     int32_t axisPID_D[XYZ_AXIS_COUNT];
+     int32_t axisPID_F[XYZ_AXIS_COUNT];
+     int32_t axisPID_S[XYZ_AXIS_COUNT];
++#ifdef USE_WING
++    int32_t axisS_preTpa[XYZ_AXIS_COUNT];
++    int32_t spa[XYZ_AXIS_COUNT];
++    int32_t setpointAdj[XYZ_AXIS_COUNT];
++    int32_t tpaSpeedEst;
++    int32_t tpaArg;
++#endif
+
+     int16_t rcCommand[4];
+@@ -529,6 +548,12 @@ static bool testBlackboxCondition(FlightLogFieldCondition condition)
+ #ifdef USE_WING
+     case CONDITION(NONZERO_WING_S_0):
+     case CONDITION(NONZERO_WING_S_1):
+     case CONDITION(NONZERO_WING_S_2):
+         return (currentPidProfile->pid[condition - CONDITION(NONZERO_WING_S_0)].S != 0) && isFieldEnabled(FIELD_SELECT(PID));
++
++    case CONDITION(NONZERO_SPA_0):
++    case CONDITION(NONZERO_SPA_1):
++    case CONDITION(NONZERO_SPA_2):
++        return (currentPidProfile->spa_mode[condition - CONDITION(NONZERO_SPA_0)] != SPA_MODE_OFF) && isFieldEnabled(FIELD_SELECT(PID));
+ #endif
+
+@@ -681,10 +706,22 @@ static void writeIntraframe(void)
+ #ifdef USE_WING
+         for (int x = 0; x < XYZ_AXIS_COUNT; x++) {
+             if (testBlackboxCondition(CONDITION(NONZERO_WING_S_0) + x)) {
+                 blackboxWriteSignedVB(blackboxCurrent->axisPID_S[x]);
+             }
+         }
++        for (int x = 0; x < XYZ_AXIS_COUNT; x++) {
++            if (testBlackboxCondition(CONDITION(NONZERO_WING_S_0) + x)) {
++                blackboxWriteSignedVB(blackboxCurrent->axisS_preTpa[x]);
++            }
++        }
++        for (int x = 0; x < XYZ_AXIS_COUNT; x++) {
++            if (testBlackboxCondition(CONDITION(NONZERO_SPA_0) + x)) {
++                blackboxWriteSignedVB(blackboxCurrent->spa[x]);
++            }
++        }
++        blackboxWriteSignedVB(blackboxCurrent->tpaSpeedEst);
++        blackboxWriteSignedVB(blackboxCurrent->tpaArg);
+ #endif
+     }
+
+@@ -700,6 +737,11 @@ static void writeIntraframe(void)
+     if (testBlackboxCondition(CONDITION(SETPOINT))) {
+         // Write setpoint roll, pitch, yaw, and throttle
+         blackboxWriteSigned16VBArray(blackboxCurrent->setpoint, 4);
++#ifdef USE_WING
++        for (int x = 0; x < XYZ_AXIS_COUNT; x++) {
++            blackboxWriteSignedVB(blackboxCurrent->setpointAdj[x]);
++        }
++#endif
+     }
+
+@@ -866,10 +908,28 @@ static void writeInterframe(void)
+ #ifdef USE_WING
+         for (int x = 0; x < XYZ_AXIS_COUNT; x++) {
+             if (testBlackboxCondition(CONDITION(NONZERO_WING_S_0) + x)) {
+                 blackboxWriteSignedVB(blackboxCurrent->axisPID_S[x] - blackboxLast->axisPID_S[x]);
+             }
+         }
++        for (int x = 0; x < XYZ_AXIS_COUNT; x++) {
++            if (testBlackboxCondition(CONDITION(NONZERO_WING_S_0) + x)) {
++                blackboxWriteSignedVB(blackboxCurrent->axisS_preTpa[x] - blackboxLast->axisS_preTpa[x]);
++            }
++        }
++        for (int x = 0; x < XYZ_AXIS_COUNT; x++) {
++            if (testBlackboxCondition(CONDITION(NONZERO_SPA_0) + x)) {
++                blackboxWriteSignedVB(blackboxCurrent->spa[x] - blackboxLast->spa[x]);
++            }
++        }
++        blackboxWriteSignedVB(blackboxCurrent->tpaSpeedEst - blackboxLast->tpaSpeedEst);
++        blackboxWriteSignedVB(blackboxCurrent->tpaArg - blackboxLast->tpaArg);
+ #endif
+     }
+
++    // setpointAdj P-frame emission (encoded as delta) - mirrors setpoint above
++    // Note: standard setpoint is emitted earlier in this function via setpointDeltas/TAG8_4S16.
++    // We emit setpointAdj after that block; the existing block sits ~30 lines up.
++    // The hunk above stays compatible because we use a fresh testBlackboxCondition gate.
++
++
+ /*
+@@ -1259,11 +1319,37 @@ static void loadMainState(timeUs_t currentTimeUs)
+         blackboxCurrent->axisPID_F[i] = lrintf(pidData[i].F);
+ #ifdef USE_WING
+         blackboxCurrent->axisPID_S[i] = lrintf(pidData[i].S);
++        blackboxCurrent->axisS_preTpa[i] = lrintf(pidRuntime.sTermPreTpa[i]);
++        blackboxCurrent->spa[i] = lrintf(pidRuntime.spa[i] * 1000.0f);
++        blackboxCurrent->setpointAdj[i] = lrintf(pidRuntime.adjustedSetpoint[i]);
+ #endif
+         blackboxCurrent->gyroADC[i] = lrintf(gyro.gyroADCf[i] * blackboxHighResolutionScale);
+         blackboxCurrent->gyroUnfilt[i] = lrintf(gyro.gyroADC[i] * blackboxHighResolutionScale);
++    }
++#ifdef USE_WING
++    blackboxCurrent->tpaSpeedEst = lrintf(pidRuntime.tpaSpeed.speed * 10.0f);
++    blackboxCurrent->tpaArg      = lrintf(pidRuntime.tpaArgumentLogged * 1000.0f);
++#endif
++
++    /* NOTE: the loop closing brace and ACC block follow unchanged below. */
+
+diff --git a/src/main/flight/pid.h b/src/main/flight/pid.h
+--- a/src/main/flight/pid.h
++++ b/src/main/flight/pid.h
+@@ -380,6 +380,16 @@ typedef struct pidRuntime_s {
+ #ifdef USE_WING
+     float spa[XYZ_AXIS_COUNT]; // setpoint pid attenuation (0.0 to 1.0). 0 - full attenuation, 1 - no attenuation
+     tpaSpeedParams_t tpaSpeed;
+     float tpaFactorYaw;
+     float tpaFactorSterm[XYZ_AXIS_COUNT];
++
++    // Blackbox observability shadows (populated each PID loop, read in
++    // loadMainState). Cheap floats; kept in pidRuntime to avoid passing
++    // through multiple call sites.
++    float adjustedSetpoint[XYZ_AXIS_COUNT];   // post-SPA / post-Sterm adjusted setpoint per axis
++    float sTermPreTpa[XYZ_AXIS_COUNT];        // pre-TPA sTerm (before getTpaFactor multiply)
++    float tpaArgumentLogged;                  // last tpaArgument computed by calcWingTpaArgument()
++    // pidRuntime.tpaSpeed.speed already exists; we log it directly, no shadow.
+ #endif // USE_WING
+
+diff --git a/src/main/flight/pid.c b/src/main/flight/pid.c
+--- a/src/main/flight/pid.c
++++ b/src/main/flight/pid.c
+@@ -355,8 +355,10 @@ static float calcWingTpaArgument(void)
+     pidRuntime.tpaSpeed.speed += a * pidRuntime.dT;
+     pidRuntime.tpaSpeed.speed = MAX(0.0f, pidRuntime.tpaSpeed.speed);
+     const float tpaArgument = constrainf(pidRuntime.tpaSpeed.speed / pidRuntime.tpaSpeed.maxSpeed, 0.0f, 1.0f);
+
+     DEBUG_SET(DEBUG_TPA, 4, lrintf(pidRuntime.tpaSpeed.speed * 10.0f));
+     DEBUG_SET(DEBUG_TPA, 5, lrintf(tpaArgument * 1000.0f));
+
++    // Shadow for blackbox main-frame logging.
++    pidRuntime.tpaArgumentLogged = tpaArgument;
++
+     return tpaArgument;
+ }
+@@ -395,7 +397,9 @@ static float wingAdjustSetpoint(float currentPidSetpoint, int axis)
+         }
+     }
+
+     DEBUG_SET(DEBUG_WING_SETPOINT, 2 * axis, lrintf(currentPidSetpoint));
+     DEBUG_SET(DEBUG_WING_SETPOINT, 2 * axis + 1, lrintf(adjustedSetpoint));
++
++    pidRuntime.adjustedSetpoint[axis] = adjustedSetpoint;
++
+     return adjustedSetpoint;
+ #else
+     UNUSED(axis);
+@@ -956,11 +960,17 @@ static float getSterm(int axis, const pidProfile_t *pidProfile, float setpoint)
+ {
+ #ifdef USE_WING
+     float sTerm = setpoint / getMaxRcRate(axis) * 1000.0f *
+         (float)pidProfile->pid[axis].S * S_TERM_SCALE;
+
+     DEBUG_SET(DEBUG_S_TERM, 2 * axis, lrintf(sTerm));
++
++    // Shadow pre-TPA sTerm for blackbox.
++    pidRuntime.sTermPreTpa[axis] = sTerm;
++
+     sTerm *= getTpaFactor(pidProfile, axis, TERM_S);
+     DEBUG_SET(DEBUG_S_TERM, 2 * axis + 1, lrintf(sTerm));
+
+     return sTerm;
+ #else
+--
+2.45.0

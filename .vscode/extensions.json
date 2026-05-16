@@ -1,0 +1,14 @@
+{
+  "recommendations": [
+    "Vue.volar",
+    "rust-lang.rust-analyzer",
+    "bradlc.vscode-tailwindcss",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "tauri-apps.tauri-vscode",
+    "vitest.explorer",
+    "tamasfe.even-better-toml",
+    "EditorConfig.EditorConfig",
+    "streetsidesoftware.code-spell-checker"
+  ]
+}
