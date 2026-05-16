@@ -1,0 +1,27 @@
+# Standalone workspace root: src-tauri is intentionally NOT a member of the
+# WingTune root workspace. Tauri convention keeps it independent so the
+# desktop shell can have its own profiles and own Cargo.lock.
+[workspace]
+
+[package]
+name = "wingtune-tauri"
+version = "0.1.0"
+description = "Tauri 2.x desktop shell for WingTune"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Bskimp/WingTune"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "wingtune_tauri"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.1" }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.1" }
+tauri-plugin-log = "2"
