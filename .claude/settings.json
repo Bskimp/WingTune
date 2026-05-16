@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_context-mode_context-mode__ctx_search",
+      "mcp__plugin_context-mode_context-mode__ctx_fetch_and_index",
+      "mcp__plugin_github_github__pull_request_read",
+      "mcp__plugin_github_github__get_file_contents",
+      "mcp__plugin_github_github__search_code",
+      "mcp__plugin_github_github__search_pull_requests",
+      "mcp__plugin_github_github__list_branches",
+      "mcp__plugin_github_github__search_issues",
+      "mcp__plugin_github_github__list_commits",
+      "mcp__plugin_github_github__search_repositories",
+      "mcp__claude-in-chrome__read_console_messages"
+    ]
+  }
+}
