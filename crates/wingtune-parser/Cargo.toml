@@ -8,10 +8,11 @@ repository.workspace = true
 description = "Layer 1 ingest: WASM-bound wrapper around blackbox-log for WingTune"
 
 [lib]
-# `cdylib` is added in M1.1.2 when the WASM build pipeline lands; `rlib`
-# is enough now to let `validate-parser` depend on this crate as a regular
-# Rust library.
-crate-type = ["rlib"]
+# `cdylib` for wasm-pack to produce a loadable WASM module; `rlib` so
+# `validate-parser` and other native callers can still use this crate
+# as a normal Rust library.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 blackbox-log = "0.4"
+wasm-bindgen = "0.2"

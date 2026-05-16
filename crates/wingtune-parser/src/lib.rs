@@ -4,9 +4,12 @@
 //! import `blackbox-log`. See the `wingtune-architecture` skill for the
 //! three-layer rule.
 
+use wasm_bindgen::prelude::*;
+
 /// One-line description of the underlying parser, surfaced by the M1.1
 /// smoke wiring to confirm the WASM → worker → main-thread round-trip
 /// resolves end-to-end.
+#[wasm_bindgen]
 pub fn parser_info() -> String {
     // Construct a `File` from empty bytes purely so the `blackbox-log`
     // dependency actually has to link — proves the `[patch.crates-io]`
