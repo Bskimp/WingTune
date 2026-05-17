@@ -20,10 +20,12 @@
 //   v_term_horiz = τ · TWR · g
 //   k     = 1 / (v_term_horiz · τ)        drag-coeff over mass
 //
-// PITCH SIGN: BF logs pitch as nose-up positive. Climbing should
-// decelerate airspeed → the gravity term is `−g · sin(pitch)`. If
-// firmware verification later shows BF uses the opposite convention
-// internally, flip the sign here; the rest of the model stays put.
+// PITCH SIGN: BF logs `attitude[1]` with NEGATIVE for nose-up and
+// POSITIVE for nose-down (Brian-confirmed BF convention; verified
+// 2026-05-17). The integrator works in a nose-up-positive convention
+// so it can write `−g · sin(pitch)` and have climb → deceleration.
+// `buildAirspeedFitInputs` negates the raw BF value at the boundary
+// so the integrator's sign convention stays clean.
 //
 // INTEGRATOR: explicit Euler. At BF's typical logged rate (~125 Hz)
 // the model is stable for any realistic (delay, gravity, max_voltage)
@@ -345,8 +347,11 @@ export function buildAirspeedFitInputs(args: BuildInputsArgs): BuiltInputs | nul
     th[j] = thv;
     vb[j] = vbat[k];
     if (!pitchFromFallback) {
-      // attitude[1] is deci-degrees (Signed); convert to radians.
-      pi[j] = pitchRaw![k] * 0.1 * Math.PI / 180;
+      // attitude[1] is deci-degrees, BF sign convention NEGATIVE for
+      // nose-up / POSITIVE for nose-down. Integrator expects nose-up-
+      // positive so we negate at this boundary (single source of
+      // truth — the integrator never sees raw BF pitch).
+      pi[j] = -pitchRaw![k] * 0.1 * Math.PI / 180;
     }
   }
   const gpsSpeed = resampleToTimeAxis(args.gpsTimeSec, gpsSpeedRaw, t);
