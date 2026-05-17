@@ -9,7 +9,8 @@
 
 Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
 M1 functionally complete (corpus track aside); M2 emission loop
-landed.
+landed; M3 BASIC airspeed fit + recommender landed (visual validation
+on a clean wing calibration flight still pending).
 
 **Done:**
 
@@ -71,21 +72,55 @@ landed.
   red gate, RecommendList severity-sorted, RecommendTab header with
   must/should/could/ok score breakdown). TabBar auto-shows the
   Recommend tab when rec count > 0.
+- M3 BASIC airspeed fit (slices 1-4): Airspeed tab routed in TabBar;
+  `lib/airspeedFit.ts` (physical integrator from BF's CLI-tunable
+  delay/gravity/max_voltage params, hand-rolled Nelder-Mead, coverage
+  metrics, shared `buildAirspeedFitInputs` helper); `AirspeedPanel.vue`
+  (GPS-window-trimmed comparison chart with predicted vs GPS-3D traces,
+  fit params/R²/RMS in header, pitch-optional with level-flight
+  fallback annotation); `lib/recommenders/airspeedBasic.ts` (7-criteria
+  confidence — R², speed range, throttle transitions, voltage sag,
+  convergence, fit window, pitch presence — emits paste-ready
+  `set tpa_speed_basic_*` CLI when green, red removes CLI per the
+  cardinal rule, evidence chip pins cursor at peak residual).
+  `RecommenderArgs` now carries `gpsTimeSec`. See
+  [[project-bf-basic-airspeed-model]] for the physical formula +
+  tuning heuristics.
+- Parser GPS hydration: `hydrate.rs` now returns
+  `HydrateResult { fields, gps_times_sec }` with GPS-frame iteration
+  alongside main-frame; wasmBridge boundary type extended; log store
+  exposes `gpsTimeSec`. `lib/timeAlign.ts` resamples GPS values onto
+  the main-frame axis (single-sweep linear interpolation, endpoint-
+  clamping for pre-/post-fix windows).
 
 **In flight / pending:**
 
+- M3 visual validation on a clean wing calibration flight — LOG00113
+  has 0 satellites (no lock); btfl_002 has GPS lock but is mostly
+  ground/hand-held so the fit can't recover sane params. Need a real
+  sustained-cruise log with throttle variation + ideally attitude[1]
+  + DEBUG_TPA for firmware cross-check.
+- Pitch sign convention vs BF firmware (currently `−g·sin(pitch)`
+  assuming BF nose-up positive). Verify against firmware source when
+  M5 work begins.
 - M1.0 corpus assembly track (not started).
 - M1.5 log inspector: partially covered by Summary tab's
   FieldTable + ReadinessCard. A deeper CLI-parameter-dump browser
-  is the gap.
+  is the gap. Bonus polish queued: field-table sample-count + all-zero
+  indicator for `gps:*` fields (needs `sample_check` populated in
+  `scan.rs` first — currently stubbed to empty `BTreeMap`).
 - M1.7 multi-log + alignment (not started).
 - Scan-progress streaming UX (indeterminate striped bar today;
   real % needs Layer 1 worker progress messages).
 - LRU eviction policy on hydrated-field cache (constant only today).
 - Tauri-side `openSource(path)` command + native file picker.
 - Upstream `blackbox-log` PR (held by Brian).
-- Pinned-cursor evidence-chip wiring on RecommendCard (rec
-  emission shape supports it; UI deferred to slice 3).
+- `checkAirspeedAutoTune` predicate split: currently gates on
+  `debug_mode = TPA` (cross-validation case) but the BASIC fit
+  recommender doesn't need DEBUG_TPA — the readiness BLOCKED label
+  reads as more pessimistic than reality. Split into two checks
+  (BASIC-fit-runnable vs DEBUG_TPA-cross-check) when the M3 UX shakes
+  out on a clean log.
 
 **Immediate next step when resuming code work:** Brian's call —
 candidates are M3 (airspeed/TPA fit using DEBUG_TPA signal),
