@@ -41,9 +41,14 @@ const SPECS: RecSpec[] = [
   },
   {
     mode: 'TPA',
-    moduleLabel: 'airspeed auto-tune',
-    unlocks: ['airspeed auto-tune'],
-    isBlocked: (m) => m.airspeedAutoTune.state === 'blocked',
+    moduleLabel: 'DEBUG_TPA cross-check',
+    unlocks: ['firmware-estimator cross-check on the BASIC airspeed fit'],
+    // Pre-split this checked `airspeedAutoTune.state === 'blocked'`,
+    // which only fired when GPS was missing — but setting `debug_mode = TPA`
+    // doesn't fix missing GPS. Now we trigger on the actual DEBUG_TPA-missing
+    // condition (tpaCrossCheck blocked), which is the case `set debug_mode = TPA`
+    // actually addresses.
+    isBlocked: (m) => m.airspeedAutoTune.tpaCrossCheck.state === 'blocked',
   },
   {
     mode: 'SPA',

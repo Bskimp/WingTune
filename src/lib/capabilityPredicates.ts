@@ -51,7 +51,24 @@ export type FieldPresence = 'missing' | 'zero' | 'active';
 export interface ModuleReport {
   basicViewing:      Capability;
   pidfsDecomp:       { roll: Capability; pitch: Capability; yaw: Capability };
-  airspeedAutoTune:  Capability;
+  /** Airspeed auto-tune surfaces as TWO separate readiness items:
+   *
+   *   · basicFit — can the BASIC airspeed model fit run? Needs GPS
+   *     present + locked. Independent of debug_mode.
+   *   · tpaCrossCheck — can we cross-validate the BASIC fit against
+   *     BF's own `tpa_speed_est`? Needs `debug_mode = TPA`. Bonus
+   *     confidence, not a prerequisite.
+   *
+   *  Previously these were packed into a single `Capability` whose
+   *  state conflated two distinct concerns — readers couldn't tell
+   *  whether "partial" meant "no DEBUG_TPA" or "no GPS." Splitting
+   *  also fixes a latent bug in debugModeRecommender where the
+   *  `set debug_mode = TPA` rec fired on the GPS-missing path (which
+   *  setting DEBUG_TPA doesn't fix). */
+  airspeedAutoTune: {
+    basicFit:      Capability;
+    tpaCrossCheck: Capability;
+  };
   tpaCurveFit:       Capability;
   spaEffectiveness:  { roll: Capability; pitch: Capability; yaw: Capability };
   sTermTpaViz:       { roll: Capability; pitch: Capability; yaw: Capability };
@@ -194,22 +211,10 @@ export function checkTpaCurveFit(capability: CapabilityReport): Capability {
   return { state: 'available', via };
 }
 
-/** Airspeed auto-tune. WingTune supports two paths:
- *
- *   1. **BASIC fit (M3 slice 4 recommender)** — fits BF's BASIC airspeed
- *      model against logged GPS 3D speed. Needs GPS present + actually
- *      locked (gps:GPS_speed not all-zero). DEBUG_TPA is NOT required.
- *   2. **Firmware cross-check** — additionally requires
- *      `debug_mode = TPA` so we can read BF's own `tpa_speed_est` and
- *      validate our fit against it. Strictly bonus confidence.
- *
- *  State mapping:
- *    - `available` = path (1) runs AND path (2) cross-check available
- *    - `partial`   = path (1) runs but cross-check missing (no DEBUG_TPA)
- *    - `inactive`  = GPS frames emitted but never locked (all-zero speed
- *                    OR all-zero DEBUG_TPA channel)
- *    - `blocked`   = no GPS module at all */
-export function checkAirspeedAutoTune(capability: CapabilityReport): Capability {
+/** Airspeed BASIC fit — can the M3 BASIC airspeed model fit run on
+ *  this log? Pure GPS check (presence + lock). Independent of
+ *  debug_mode entirely. */
+export function checkAirspeedBasicFit(capability: CapabilityReport): Capability {
   if (!capability.gps_present) {
     return {
       state: 'blocked',
@@ -223,18 +228,25 @@ export function checkAirspeedAutoTune(capability: CapabilityReport): Capability 
       reason: 'GPS frames present but never got a satellite lock — gps:GPS_speed all zero across the flight',
     };
   }
+  return { state: 'available' };
+}
 
+/** DEBUG_TPA firmware cross-check — can we read BF's own
+ *  `tpa_speed_est` to cross-validate our BASIC fit? Needs
+ *  `debug_mode = TPA`. Strictly bonus confidence; the BASIC fit
+ *  itself is runnable without this. */
+export function checkAirspeedTpaCrossCheck(capability: CapabilityReport): Capability {
   const speed = resolveSignal('tpa_speed_est', null, capability);
   if (speed.state === 'missing') {
     return {
-      state: 'partial',
-      reason: 'BASIC airspeed fit runnable. Set `debug_mode = TPA` in BF for firmware-estimator cross-check (higher confidence).',
+      state: 'blocked',
+      reason: 'set `debug_mode = TPA` in BF for the firmware-estimator cross-check (bonus confidence on the BASIC fit)',
     };
   }
   if (speed.state === 'inactive') {
     return {
       state: 'inactive',
-      reason: 'airspeed estimate channel logged but always zero — check `gps_use_3d_speed = ON` in BF',
+      reason: 'DEBUG_TPA channel logged but always zero — check `gps_use_3d_speed = ON` in BF',
       via: speed.via,
     };
   }
@@ -306,7 +318,10 @@ export function evaluateModules(capability: CapabilityReport): ModuleReport {
       pitch: checkPidfsDecomp(1, capability),
       yaw:   checkPidfsDecomp(2, capability),
     },
-    airspeedAutoTune: checkAirspeedAutoTune(capability),
+    airspeedAutoTune: {
+      basicFit:      checkAirspeedBasicFit(capability),
+      tpaCrossCheck: checkAirspeedTpaCrossCheck(capability),
+    },
     tpaCurveFit:      checkTpaCurveFit(capability),
     spaEffectiveness: {
       roll:  checkSpaEffectiveness(0, capability),

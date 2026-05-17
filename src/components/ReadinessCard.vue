@@ -54,8 +54,9 @@ const rows = computed<Row[]>(() => {
   out.push({ label: 'PIDFS decomp · roll',   capability: m.pidfsDecomp.roll });
   out.push({ label: 'PIDFS decomp · pitch',  capability: m.pidfsDecomp.pitch });
   out.push({ label: 'PIDFS decomp · yaw',    capability: m.pidfsDecomp.yaw });
-  out.push({ label: 'Airspeed auto-tune',    capability: m.airspeedAutoTune });
-  out.push({ label: 'TPA curve fit',         capability: m.tpaCurveFit });
+  out.push({ label: 'Airspeed BASIC fit',     capability: m.airspeedAutoTune.basicFit });
+  out.push({ label: 'DEBUG_TPA cross-check',  capability: m.airspeedAutoTune.tpaCrossCheck });
+  out.push({ label: 'TPA curve fit',          capability: m.tpaCurveFit });
   out.push({ label: 'SPA effectiveness · roll',  capability: m.spaEffectiveness.roll });
   out.push({ label: 'SPA effectiveness · pitch', capability: m.spaEffectiveness.pitch });
   out.push({ label: 'SPA effectiveness · yaw',   capability: m.spaEffectiveness.yaw });
