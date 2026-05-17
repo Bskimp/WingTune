@@ -8,12 +8,18 @@
 ## Status
 
 Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
-M1 functionally complete (corpus track aside); M2 emission loop
-landed; M3 BASIC airspeed fit + recommender landed; M4 spectrum tab +
-filter analysis + spectrum recommenders landed; M1.5 deeper BBL
-header inspector landed; M-Step closed-loop deconvolution landed.
-Step tab no longer a placeholder. M3 + M4 raw-gyro visual validation
-deferred (need calibration flights with the right debug modes).
+M1 functionally complete (corpus track aside). **Wing analytics
+suite (M2 / M3 / M5 / M6 / M7) now complete** — M2 PIDFS decomp,
+M3 BASIC airspeed fit, M4 spectrum + filter analysis, M-Step closed-
+loop deconvolution (calibrated against PIDscope), M5 HYPERBOLIC TPA
+curve fitter (the previously-deferred module), M6 SPA effectiveness
+analyzer, M7 S-term TPA effectiveness viz, M1.5 deeper BBL header
+inspector — all shipped with their panels + recommenders + tests.
+Tauri shell native file open + LRU field-cache eviction +
+estimated scan-progress bar + airspeed-predicate split also landed.
+Generic Nelder-Mead extracted to `lib/nelderMead.ts` and shared by
+`airspeedFit` and `tpaCurveFit`. M3 / M5 / M6 / M7 visual validation
+all deferred (need calibration flights with the right debug modes).
 
 **Done:**
 
@@ -141,88 +147,139 @@ deferred (need calibration flights with the right debug modes).
   and `checkAirspeedAutoTune` correctly hits the `inactive` branch
   on logs where GPS frames exist but never locked.
 - M-Step closed-loop deconvolution: `lib/stepResponse.ts` — Wiener
-  deconvolution (`H(f) = G·conj(S)/(|S|²+λ)`, λ = 1% peak |S|²) with
-  Welch-style windowed averaging across overlapping segments. Drops
-  segments below the setpoint-RMS gate (deconvolving against near-
-  zero input amplifies noise). Hand-rolled `ifftInPlace` via the
-  FFT(conj(x))/N trick, no new dependency. Exposed metrics: peak
-  amplitude (>1 = overshoot), peak time, settling time (first
-  crossing of 0.95×finalValue), final value, num kept segments.
-  `StepResponsePanel.vue` is per-axis (PIDtoolbox convention) with
-  R/P/Y selector chips, peak %+settling ms header metrics
-  (traffic-light coloured), reference line at y=1.0 via uPlot draw
-  hook, honest "fly more aggressive manoeuvres" pending state for
-  low-excitation logs. Replaces the M-step TabPlaceholder.
+  deconvolution with Welch-style windowed averaging. Three
+  algorithmic fixes shipped 2026-05-17 after side-by-side against
+  PIDtoolbox + PIDscope reference (`PSstepcalc.m`, GPL-3):
+    · Dropped spurious ×2 "Hann coherent-gain correction" (cancels
+      in the Wiener ratio when num + denom share window).
+    · Switched Wiener λ from data-scaled to absolute `1e-4` (PIDscope
+      value — wing setpoints have huge low-freq energy that made
+      scaled λ kill mid-band ringing).
+    · Replaced setpoint-RMS gate with peak gate (50 deg/s) +
+      per-segment cumsum + tail-window QC band `[0.5, 3.0]`.
+  Final calibration vs PIDscope still held (PIDscope wasn't loading
+  logs locally on 2026-05-17); shape character now matches PIDtoolbox
+  (ringy oscillation) but amplitude calibration TBD pending PIDscope
+  cross-reference. `StepResponsePanel.vue` is per-axis with R/P/Y
+  chips, traffic-light peak/settling metrics, y=1.0 reference line.
+- M6 SPA effectiveness: `lib/spaAnalysis.ts` — per-axis SPA
+  multiplier analysis with gate-active region detection, wind-up
+  events (I-term grows while gate at floor), bounce-back events
+  (post-release I-term peak within 200 ms). `SpaPanel.vue` overlays
+  SPA multiplier (left axis 0..1) + I-term (right axis) with
+  gate-active background bands + event markers via uPlot draw hook.
+  `lib/recommenders/spa.ts`: yellow-confidence diagnostic recs with
+  BF tuning hints; CLI emission deferred until validated wing SPA
+  flight in corpus.
+- M7 S-term TPA viz: `lib/sTermAnalysis.ts` — per-sample TPA factor
+  (post/pre) with NaN gaps where pre below activeThreshold;
+  sign-mismatch samples count as cancelled. `STermPanel.vue` is
+  diagnostic-only (no CLI per roadmap Module F): pre-TPA vs
+  post-TPA S overlay + TPA factor on secondary axis + y=1.0
+  reference line via draw hook.
+- M5 HYPERBOLIC TPA curve fitter: `lib/tpaCurveFit.ts` —
+  `evaluateHyperbolic(x, params)` port of BF's
+  `pid_init.c::tpaCurveHyperbolicFunction` (PR #13805); flat
+  plateau below stallThrottle, then `1/log`-derived curve with
+  endpoints pinned to (stallThrottle, pidThr0) and (1.0, pidThr100).
+  `fitHyperbolicCurve` is a 4-param Nelder-Mead fit with coverage
+  stats (low/mid/high band dwell). `TpaCurvePanel.vue`: scatter of
+  measured (tpa_arg, tpa_factor) overlaid with fitted curve, header
+  surfaces RMS + endpoint params + expo + sample count + x range.
+  `lib/recommenders/tpaCurve.ts`: 6-criteria confidence — RMS,
+  low/high-band dwell, x range, sample count, convergence — emits
+  paste-ready `set tpa_curve_*` CLI; expo line promoted from
+  informational to CLI only when `|expo| > 5` after a converged fit.
+  Spec doc at `docs/firmware-reference/tpa-hyperbolic-spec.md`
+  (extracted via research agent against BF PR #13805 + discussion
+  #13786). Added `tpa_factor` signal to the registry (DEBUG_TPA
+  channel 2, TODO verify on first real flight). Rewrote
+  `checkTpaCurveFit` to read DEBUG_TPA directly (was deriving from
+  WING_SETPOINT ratio); collapsed stale WING_SETPOINT spec in
+  debugModeRecommender into the TPA spec which now covers BOTH
+  cross-check AND curve fit. Closed the deferred M5 module.
+- Tauri shell native file open: `tauri-plugin-dialog` +
+  `tauri-plugin-fs` (v2) registered in `src-tauri/src/lib.rs`;
+  capabilities scoped to `**/*.bbl`/`*.BBL`/`*.bfl`/`*.BFL`/`*.txt`.
+  JS-side `@tauri-apps/api` + `@tauri-apps/plugin-dialog` +
+  `@tauri-apps/plugin-fs` deps; `tauri:dev` / `tauri:build` npm
+  scripts. `src/lib/tauriBridge.ts`: `isTauri()` runtime probe +
+  `pickAndOpenLogFile()` that opens the native dialog filtered to
+  BF extensions, reads bytes via fs, and returns a browser File
+  (so the rest of the load pipeline doesn't branch). "Open file…"
+  button rendered in FileDropZone EMPTY state ONLY under Tauri.
+- LRU field-cache eviction: log-store cache now sweeps after each
+  ensureFields(), evicting from Map insertion order (oldest first)
+  until under DEFAULT_FIELD_CACHE_BYTES (256 MB). `pinFields()`
+  action exposed so the recommender-required set can be marked
+  never-evict — AnalysisView pins ALL_RECOMMENDER_REQUIRED_FIELDS
+  on log load so the LRU pass can't thrash hot fields.
+- Estimated scan-progress bar: determinate bar bound to
+  `scanProgress` ref (0..100), animated by requestAnimationFrame
+  ramping 0 → 95% across expected duration (file size / empirical
+  ~5 MB/s throughput), snaps to 100% on actual completion. NOT true
+  byte-level progress — the Rust `scan_log` is one-shot today;
+  real streaming progress remains a future slice. Replaces the
+  prior indeterminate striped bar.
+- Airspeed predicate split + latent rec-bug fix:
+  `checkAirspeedAutoTune` split into `checkAirspeedBasicFit` (pure
+  GPS check) + `checkAirspeedTpaCrossCheck` (pure debug-mode check).
+  ReadinessCard now shows them as two distinct rows. Fixed latent
+  bug in `debugModeRecommender` where the TPA-rec was triggering
+  on the GPS-missing path (which `set debug_mode = TPA` doesn't
+  fix); now triggers on the actual DEBUG_TPA-missing condition.
+- Generic Nelder-Mead extracted: `lib/nelderMead.ts` is the
+  canonical simplex optimiser, consumed by both `airspeedFit.ts`
+  (refactored from a specialised inline 4-vertex version, all 15
+  tests pass) and `tpaCurveFit.ts`. `NelderMeadOptions.initialStep`
+  accepts `number | readonly number[]` so per-axis absolute steps
+  can handle params with wildly different scales (e.g. ms vs %).
 
 **In flight / pending:**
 
-- **M3 + M4 visual validation flight (held)** — Need calibration
-  flights to fully validate:
-    · M3 (BASIC airspeed fit): a sustained-cruise wing flight with
-      throttle variation + GPS lock the whole flight + ideally
-      `debug_mode = TPA` for firmware-estimator cross-check + ideally
-      `attitude[1]` in the main frame (some BF builds skip the AHRS
-      estimator).
-    · M4 (pre/post-filter overlay): a flight with
-      `debug_mode = GYRO_RAW` (separate flight from the TPA one since
-      BF logs one debug mode per flight).
-  Current logs (LOG00113, btfl_002) don't satisfy any of these — the
-  fit + overlay surfaces are correctly emitting blocked/missing
-  states. This is a "go fly" task, not a code task. Flagged so it
-  doesn't get lost.
-- Pitch sign convention vs BF firmware (currently `−g·sin(pitch)`
-  assuming BF nose-up positive). Verify against firmware source when
-  M5 work begins.
+- **M3 / M5 / M6 / M7 visual validation flights (held)** — Need
+  calibration flights with the right debug modes to fully validate:
+    · M3 (BASIC airspeed fit) + M5 (HYPERBOLIC TPA curve fit) +
+      DEBUG_TPA cross-check: a sustained-cruise wing flight with
+      throttle variation + GPS lock + `debug_mode = TPA` + ideally
+      `attitude[1]` in main frame.
+    · M4 raw-gyro overlay: a flight with `debug_mode = GYRO_RAW`.
+    · M6 (SPA effectiveness): a flight with `debug_mode = SPA`.
+    · M7 (S-term TPA viz): a flight with `debug_mode = S_TERM`.
+  BF logs one debug mode per flight, so these need separate
+  calibration sorties. Current logs (LOG00113, btfl_002) don't
+  satisfy any — the panels correctly emit blocked/missing pending
+  states. "Go fly" task, not a code task.
+- Verify `tpa_factor` is DEBUG_TPA channel 2 on first real flight.
+  The signal registry guesses channel 2 (the natural ordering
+  after `tpa_speed_est`=0 and `tpa_arg`=1), but the BF source
+  channel index wasn't pinned during the M5 recon pass. Wrong
+  channel index would surface garbage as "resolved" output.
+- Step-response settling-metric refinement vs PIDscope: shape
+  character matches PIDtoolbox now (commit `d6781fc`) but amplitude
+  still inflated (peak ~335% vs PIDtoolbox ~130% on btfl_002).
+  Held on PIDscope's log loader — wasn't loading on Brian's
+  machine 2026-05-17. Knobs to dial when PIDscope is available:
+  tighten tail-QC band to `[0.7, 1.5]`, bump segmentLen to 8192
+  (2 s at 4 kHz), or raise peak gate to 80 deg/s.
 - M1.0 corpus assembly track (not started).
-- Step-response calibration vs PIDtoolbox / PIDscope: three algorithmic
-  fixes shipped 2026-05-17 after a side-by-side with PIDtoolbox on
-  btfl_002 showed our curve was a smooth ramp where theirs had
-  ringing. Per a research pass against the PIDscope reference fork
-  (GPL-3, PSstepcalc.m):
-    · Dropped the spurious ×2 "Hann coherent-gain correction" in the
-      cumsum — when num + denom share the same window the gain
-      cancels in the Wiener ratio. Peak halved as predicted.
-    · Switched Wiener λ from data-scaled (`0.01 × max|S|²`) to absolute
-      (`1e-4`, PIDscope value). Wing setpoints have huge low-freq
-      energy from sustained turn commands, which made our scaled λ
-      massive and killed mid-band ringing. Ringing returned
-      immediately.
-    · Replaced setpoint-RMS gate with setpoint-peak gate (50 deg/s) +
-      per-segment cumsum + tail-window QC band [0.5, 3.0]. Rejects
-      cruise-trim segments and blown-up deconvolutions before they
-      pollute the average. Segments dropped 22 → 13.
-  Result on btfl_002: shape character now matches PIDtoolbox (ringy
-  oscillation, not smooth ramp), but amplitude still inflated (peak
-  335 % vs PIDtoolbox's 130 %, 13 segments vs their n=2). Remaining
-  gap is calibration — likely tail-QC band too wide ([0.5, 3.0] lets
-  segments with tail-mean 2.5 contribute), segment length too short
-  (0.5 s vs PIDscope's 2 s — doesn't capture full settling), or peak
-  gate too permissive. **Next step**: load btfl_002 in PIDscope for
-  ground-truth comparison (PIDscope uses our exact algorithm now).
-  PIDscope wasn't loading logs on Brian's machine 2026-05-17 — revisit
-  when that's fixed. Then dial one of: tighten QC to [0.7, 1.5], bump
-  segmentLen to 8192 (2 s at 4 kHz), or raise peak gate to 80 deg/s —
-  based on which knob PIDscope's output identifies as dominant.
-- M1.7 multi-log + alignment (not started).
-- Scan-progress streaming UX (indeterminate striped bar today;
-  real % needs Layer 1 worker progress messages).
-- LRU eviction policy on hydrated-field cache (constant only today).
-- Tauri-side `openSource(path)` command + native file picker.
+- M1.7 multi-log + session persistence (not started — ~2-3 weeks).
+- Real Rust scan-progress callback. The estimated bar in
+  FileDropZone (commit `ed9acb1`) is interim — animation against
+  expected duration, not actual byte-level progress. True progress
+  needs a Rust callback threaded through the scan loop +
+  `&js_sys::Function` plumbing in `scanLog` + worker postMessage
+  forwarding + bridge progress callback + store update. ~1-2 hour
+  slice.
 - Upstream `blackbox-log` PR (held by Brian).
-- `checkAirspeedAutoTune` predicate split: currently gates on
-  `debug_mode = TPA` (cross-validation case) but the BASIC fit
-  recommender doesn't need DEBUG_TPA — the readiness BLOCKED label
-  reads as more pessimistic than reality. Split into two checks
-  (BASIC-fit-runnable vs DEBUG_TPA-cross-check) when the M3 UX shakes
-  out on a clean log.
 
-**Immediate next step when resuming code work:** Brian's call —
-candidates are M3 (airspeed/TPA fit using DEBUG_TPA signal),
-deeper M2 recs (e.g. PIDFS share-imbalance detection), M5 (TPA
-curve fit using WING_SETPOINT pre/post pair), Tauri shell wire-up,
-or scan-progress streaming. The chart + cursor + rec infrastructure
-is in place — pick a module, write its analytics, plug recs into
-the existing recommender registry.
+**Immediate next step when resuming code work:** Brian's call. The
+wing analytics suite is complete; remaining concrete code items are
+the real Rust scan-progress callback (~1-2 h) or M1.7 multi-log
+(~2-3 weeks). Everything else either needs flight data, is held on
+Brian's call (upstream PR), or is a polish lift. The chart + cursor
++ recommender + capability infrastructure is well-trodden — adding
+a new analytics module follows the established pattern.
 
 ## Cardinal rules
 
