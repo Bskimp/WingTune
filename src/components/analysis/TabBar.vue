@@ -1,25 +1,32 @@
 <script setup lang="ts">
 // Top tab bar for the analysis view. Tabs are driven by view.activeTab.
-// The Recommend tab is hidden in M1 (per `project-recommender-tab`
-// memory: empty surfaces read as broken; hidden until M2+ analytics
-// emit at least one rec). Spectrum and Step are visible but route to
-// the "analytics pending" placeholder until their modules land.
+// Recommend appears only when at least one rec is currently emitted —
+// per `project-recommender-tab`, an empty Recommend tab reads as a
+// broken feature, so we hide it until there's content. Spectrum and
+// Step are always visible and route to the "module pending"
+// placeholder until their analytics land.
+//
+// Servos sits next to Tracking because both are wing-actuator
+// surfaces (see `project-servo-first-class`); putting them adjacent
+// keeps the "what is my plane doing right now" tabs grouped.
 
 import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 
+import { useLogStore } from '@/stores/log';
 import { useViewStore, type AnalysisTab } from '@/stores/view';
+import { evaluateModules } from '@/lib/capabilityPredicates';
+import { gatherRecommendations } from '@/lib/recommendations';
 
 const view = useViewStore();
 const { activeTab } = storeToRefs(view);
 
+const logStore = useLogStore();
+const { scanReport } = storeToRefs(logStore);
+
 type TabSpec = { id: AnalysisTab; label: string };
 
-// Recommend is intentionally absent — see top-of-file comment.
-// Servos sits next to Tracking because both are wing-actuator surfaces
-// (see `project-servo-first-class`); putting them adjacent keeps the
-// "what is my plane doing right now" tabs grouped.
-const TABS: TabSpec[] = [
+const BASE_TABS: TabSpec[] = [
   { id: 'summary',  label: 'Summary' },
   { id: 'tracking', label: 'Tracking' },
   { id: 'servos',   label: 'Servos' },
@@ -27,7 +34,20 @@ const TABS: TabSpec[] = [
   { id: 'step',     label: 'Step' },
 ];
 
-const tabs = computed(() => TABS);
+const recCount = computed(() => {
+  const r = scanReport.value;
+  if (!r) return 0;
+  const modules = evaluateModules(r.capability);
+  return gatherRecommendations({ capability: r.capability, modules }).length;
+});
+
+const tabs = computed<TabSpec[]>(() => {
+  if (recCount.value === 0) return BASE_TABS;
+  return [
+    ...BASE_TABS,
+    { id: 'recommend', label: `Recommend · ${recCount.value}` },
+  ];
+});
 </script>
 
 <template>

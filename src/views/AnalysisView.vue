@@ -21,6 +21,7 @@ import TimeBar from '@/components/analysis/TimeBar.vue';
 import CursorReadout from '@/components/analysis/CursorReadout.vue';
 import TrackingTab from '@/components/analysis/TrackingTab.vue';
 import ServosTab from '@/components/analysis/ServosTab.vue';
+import RecommendTab from '@/components/analysis/RecommendTab.vue';
 import TabPlaceholder from '@/components/analysis/TabPlaceholder.vue';
 import CapabilitySummary from '@/components/CapabilitySummary.vue';
 
@@ -52,6 +53,7 @@ const { activeTab } = storeToRefs(view);
         milestone="M2 (PIDFS decomp) + M-step (closed-loop deconv)"
         blurb="Per-axis peak / latency scatters across detected setpoint steps. Needs the step-window detector and the frequency-domain deconvolution primitives — neither is in M1 scope."
       />
+      <RecommendTab v-else-if="activeTab === 'recommend'" />
     </div>
   </div>
 </template>
