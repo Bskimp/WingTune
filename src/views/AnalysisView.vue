@@ -35,6 +35,7 @@ import CursorReadout from '@/components/analysis/CursorReadout.vue';
 import TrackingTab from '@/components/analysis/TrackingTab.vue';
 import ServosTab from '@/components/analysis/ServosTab.vue';
 import AirspeedPanel from '@/components/analysis/AirspeedPanel.vue';
+import SpectrumPanel from '@/components/analysis/SpectrumPanel.vue';
 import RecommendTab from '@/components/analysis/RecommendTab.vue';
 import TabPlaceholder from '@/components/analysis/TabPlaceholder.vue';
 import CapabilitySummary from '@/components/CapabilitySummary.vue';
@@ -75,12 +76,7 @@ watch(
       <TrackingTab v-else-if="activeTab === 'tracking'" />
       <ServosTab v-else-if="activeTab === 'servos'" />
       <AirspeedPanel v-else-if="activeTab === 'airspeed'" />
-      <TabPlaceholder
-        v-else-if="activeTab === 'spectrum'"
-        tab="Spectrum"
-        milestone="M4 (filter analysis)"
-        blurb="FFT spectra of gyro/D-term, dynamic notch overlays, and filter-delay budget. Lights up once the FFT primitive and the filter-analysis module land."
-      />
+      <SpectrumPanel v-else-if="activeTab === 'spectrum'" />
       <TabPlaceholder
         v-else-if="activeTab === 'step'"
         tab="Step response"
