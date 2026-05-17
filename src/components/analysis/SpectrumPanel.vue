@@ -27,6 +27,7 @@ import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { welchPsd, psdToDb, estimateSampleRate } from '@/lib/spectrum';
 import { computeDelayBudget, type FilterDelayBudget } from '@/lib/filterDelay';
+import { resolveSignal, type Axis } from '@/lib/signalRegistry';
 import type { FilterConfig, LowPassConfig } from '@/lib/wasmBridge';
 
 const COLORS = {
@@ -54,6 +55,16 @@ const AXES: AxisSpec[] = [
   { id: 2, label: 'Yaw',   short: 'Y', field: 'gyroADC[2]', color: COLORS.stamp },
 ];
 
+type DisplayMode = 'filt' | 'raw' | 'both';
+
+const MODE_CHIPS: Array<{ key: DisplayMode; label: string; title: string }> = [
+  { key: 'filt', label: 'filt', title: 'Filtered gyro only (gyroADC main-frame)' },
+  { key: 'raw',  label: 'raw',  title: 'Raw gyro only (debug_mode = GYRO_RAW)' },
+  { key: 'both', label: 'both', title: 'Filtered (solid) + raw (dashed) overlaid' },
+];
+
+const displayMode = ref<DisplayMode>('filt');
+
 const logStore = useLogStore();
 const view = useViewStore();
 const { time, fields, hydrating, scanReport } = storeToRefs(logStore);
@@ -66,6 +77,24 @@ const delayBudget = computed<FilterDelayBudget | null>(() => {
   if (!fc) return null;
   return computeDelayBudget(fc);
 });
+
+// Resolve gyro_raw per axis through the signal registry. Returns the
+// debug[N] field name when DEBUG_GYRO_RAW is active, else null. The
+// registry handles the source choice — if BF ever exposes a main-
+// frame pre-filter gyro field, only signalRegistry.ts changes.
+const rawGyroFieldNames = computed<(string | null)[]>(() => {
+  const sr = scanReport.value;
+  if (!sr) return [null, null, null];
+  return ([0, 1, 2] as Axis[]).map((axis) => {
+    const r = resolveSignal('gyro_raw', axis, sr.capability);
+    if (r.state !== 'resolved' || r.source.kind !== 'debug') return null;
+    return `debug[${r.source.channel}]`;
+  });
+});
+
+const rawGyroAvailable = computed(
+  () => rawGyroFieldNames.value.some((n) => n !== null),
+);
 
 type OverlayKey = 'notch' | 'gyro' | 'dterm' | 'rpm';
 
@@ -107,19 +136,33 @@ const overlayChips = computed<OverlayChip[]>(() => {
 });
 
 onMounted(() => {
-  logStore.ensureFields(AXES.map((a) => a.field));
+  const fieldsToHydrate: string[] = [...AXES.map((a) => a.field)];
+  for (const n of rawGyroFieldNames.value) if (n) fieldsToHydrate.push(n);
+  logStore.ensureFields(fieldsToHydrate);
 });
 
-const isHydrating = computed(
-  () => AXES.some((a) => hydrating.value.has(a.field)),
-);
+// Re-hydrate raw fields if the log changes (rawGyroFieldNames may
+// shift from null to populated when scanReport lands).
+watch(rawGyroFieldNames, (names) => {
+  const present = names.filter((n): n is string => n !== null);
+  if (present.length > 0) logStore.ensureFields(present);
+});
+
+const isHydrating = computed(() => {
+  for (const a of AXES) if (hydrating.value.has(a.field)) return true;
+  for (const n of rawGyroFieldNames.value) {
+    if (n && hydrating.value.has(n)) return true;
+  }
+  return false;
+});
 
 const sampleRateHz = computed(() => estimateSampleRate(time.value));
 
 interface AxisPsd {
   spec: AxisSpec;
   frequencies: Float32Array;
-  db: Float32Array;
+  filteredDb: Float32Array | null;
+  rawDb: Float32Array | null;
   numSegments: number;
 }
 
@@ -128,14 +171,24 @@ const psdResults = computed<AxisPsd[]>(() => {
   if (sr <= 0) return [];
   const out: AxisPsd[] = [];
   for (const a of AXES) {
-    const arr = fields.value.get(a.field);
-    if (!arr || arr.length === 0) continue;
-    const r = welchPsd(arr, sr, SEGMENT_LEN, 0.5);
+    const filteredArr = fields.value.get(a.field);
+    const rawName = rawGyroFieldNames.value[a.id];
+    const rawArr = rawName ? fields.value.get(rawName) : undefined;
+
+    // Need at least one source to bother computing a frequency axis.
+    const fHas = filteredArr && filteredArr.length >= SEGMENT_LEN;
+    const rHas = rawArr && rawArr.length >= SEGMENT_LEN;
+    if (!fHas && !rHas) continue;
+
+    const filteredRes = fHas ? welchPsd(filteredArr!, sr, SEGMENT_LEN, 0.5) : null;
+    const rawRes      = rHas ? welchPsd(rawArr!, sr, SEGMENT_LEN, 0.5)      : null;
+
     out.push({
       spec: a,
-      frequencies: r.frequencies,
-      db: psdToDb(r.psd),
-      numSegments: r.numSegments,
+      frequencies: (filteredRes ?? rawRes!).frequencies,
+      filteredDb: filteredRes ? psdToDb(filteredRes.psd) : null,
+      rawDb:      rawRes      ? psdToDb(rawRes.psd)      : null,
+      numSegments: (filteredRes ?? rawRes!).numSegments,
     });
   }
   return out;
@@ -151,24 +204,26 @@ const data = computed<AlignedData>(() => {
   if (!ready.value) {
     return [new Float32Array(0)] as unknown as AlignedData;
   }
+  // Series order: x, filtered R, filtered P, filtered Y, raw R, raw P, raw Y.
   // All axes share the same frequency axis (same sample rate + segment
-  // length), so series align to psdResults[0].frequencies. We always
-  // emit the real db values for every axis — the show/hide toggle is
-  // applied through uPlot's `series[i].show` imperatively below, which
-  // doesn't pollute the data array with NaN (NaN-fill breaks uPlot's
-  // y-auto-range: all-NaN series produce NaN min/max which propagates
-  // to the other series and blanks the whole chart).
+  // length). Show/hide toggling is via uPlot's setSeries imperatively
+  // below — keeps data clean (no NaN poisoning of y-auto-range) and
+  // doesn't trigger chart rebuild on toggles.
   const base = psdResults.value[0];
-  const axes: Float32Array[] = AXES.map((a) => {
+  const blank = () => {
+    const b = new Float32Array(base.frequencies.length);
+    b.fill(NaN);
+    return b;
+  };
+  const filtered: Float32Array[] = AXES.map((a) => {
     const found = psdResults.value.find((r) => r.spec.id === a.id);
-    if (found) return found.db;
-    // Axis genuinely has no data (e.g. gyroADC[2] missing) — NaN-fill
-    // is OK here because the series will be set to show=false too.
-    const blank = new Float32Array(base.frequencies.length);
-    blank.fill(NaN);
-    return blank;
+    return found?.filteredDb ?? blank();
   });
-  return [base.frequencies, ...axes] as unknown as AlignedData;
+  const raw: Float32Array[] = AXES.map((a) => {
+    const found = psdResults.value.find((r) => r.spec.id === a.id);
+    return found?.rawDb ?? blank();
+  });
+  return [base.frequencies, ...filtered, ...raw] as unknown as AlignedData;
 });
 
 const opts = computed<Options>(() => ({
@@ -191,9 +246,15 @@ const opts = computed<Options>(() => ({
   },
   series: [
     {},
-    { label: 'roll',  stroke: COLORS.accent, width: 1.25 },
-    { label: 'pitch', stroke: COLORS.warn,   width: 1.25 },
-    { label: 'yaw',   stroke: COLORS.stamp,  width: 1.25 },
+    // Filtered (solid).
+    { label: 'roll',     stroke: COLORS.accent, width: 1.25 },
+    { label: 'pitch',    stroke: COLORS.warn,   width: 1.25 },
+    { label: 'yaw',      stroke: COLORS.stamp,  width: 1.25 },
+    // Raw (dashed, slightly thinner). Same axis-hue so raw/filtered
+    // pairs read together at a glance.
+    { label: 'roll raw',  stroke: COLORS.accent, width: 1, dash: [4, 3] },
+    { label: 'pitch raw', stroke: COLORS.warn,   width: 1, dash: [4, 3] },
+    { label: 'yaw raw',   stroke: COLORS.stamp,  width: 1, dash: [4, 3] },
   ],
   axes: [
     {
@@ -337,22 +398,38 @@ watch(
   },
 );
 
-// Sync per-axis show/hide via uPlot's setSeries — keeps data clean and
-// doesn't trigger a chart rebuild (vs flipping series.show via opts).
-// Re-applies on plot.updateCount in case a rebuild reset the series
-// state to its default (show=true).
+// Sync per-axis show/hide AND display-mode (filt/raw/both) via uPlot's
+// setSeries — keeps data clean and doesn't trigger a chart rebuild
+// (vs flipping series.show via opts). Re-applies on plot.updateCount
+// in case a rebuild reset the series state to its default.
+//
+// Visibility per series = axisShown (R/P/Y chip) AND mode-allows-family
+//   filt → only filtered (series 1..3) visible
+//   raw  → only raw (series 4..6) visible
+//   both → both visible
 watch(
-  [plot.updateCount, () => AXES.map((a) => view.isSeriesHidden(a.field))],
+  [
+    plot.updateCount,
+    () => AXES.map((a) => view.isSeriesHidden(a.field)),
+    displayMode,
+  ],
   () => {
     const u = plot.instance();
     if (!u) return;
+    const mode = displayMode.value;
+    const filtAllowed = mode === 'filt' || mode === 'both';
+    const rawAllowed  = mode === 'raw'  || mode === 'both';
     AXES.forEach((a, i) => {
-      const hidden = view.isSeriesHidden(a.field);
-      const idx = i + 1; // series 0 is the x axis
-      if (!u.series[idx]) return;
-      const shouldShow = !hidden;
-      if (u.series[idx].show !== shouldShow) {
-        u.setSeries(idx, { show: shouldShow });
+      const axisShown = !view.isSeriesHidden(a.field);
+      const filtIdx = i + 1;       // series 1..3
+      const rawIdx  = i + 1 + 3;   // series 4..6
+      const filtShow = axisShown && filtAllowed;
+      const rawShow  = axisShown && rawAllowed;
+      if (u.series[filtIdx] && u.series[filtIdx].show !== filtShow) {
+        u.setSeries(filtIdx, { show: filtShow });
+      }
+      if (u.series[rawIdx] && u.series[rawIdx].show !== rawShow) {
+        u.setSeries(rawIdx, { show: rawShow });
       }
     });
   },
@@ -389,6 +466,12 @@ const pendingMessage = computed(() => {
     return `log too short for ${SEGMENT_LEN}-sample window — need ≥ ${SEGMENT_LEN} samples per axis`;
   }
   return 'computing spectrum…';
+});
+
+const rawMissingHint = computed(() => {
+  if (displayMode.value === 'filt') return null;
+  if (rawGyroAvailable.value) return null;
+  return 'raw gyro not in this log — set `debug_mode = GYRO_RAW` in BF to log pre-filter gyro for comparison';
 });
 
 const segmentInfo = computed(() => {
@@ -461,6 +544,22 @@ const delayBudgetTooltip = computed(() => {
           >{{ chip.label }}</button>
         </div>
 
+        <!-- filt / raw / both mode selector -->
+        <div class="flex gap-px">
+          <button
+            v-for="chip in MODE_CHIPS"
+            :key="chip.key"
+            type="button"
+            class="px-2 py-[3px] font-mono text-[11px] font-semibold border cursor-pointer whitespace-nowrap"
+            :class="displayMode === chip.key
+              ? 'bg-bp-accent text-bp-bg border-bp-accent'
+              : 'bg-bp-surface-2 text-bp-ink-3 border-bp-line-2 hover:text-bp-ink'"
+            :aria-pressed="displayMode === chip.key"
+            :title="chip.title"
+            @click="displayMode = chip.key"
+          >{{ chip.label }}</button>
+        </div>
+
         <!-- axis toggle chips (per-axis show/hide via view.hiddenSeries) -->
         <div class="flex gap-px">
           <button
@@ -495,6 +594,12 @@ const delayBudgetTooltip = computed(() => {
         class="absolute inset-0 flex flex-col items-center justify-center font-mono text-[11px] text-bp-ink-3 text-center px-6"
       >
         {{ pendingMessage }}
+      </div>
+      <div
+        v-else-if="rawMissingHint"
+        class="absolute top-3 left-1/2 -translate-x-1/2 z-10 px-2.5 py-1 bg-bp-surface-2 border border-bp-warn font-mono text-[10.5px] text-bp-warn"
+      >
+        {{ rawMissingHint }}
       </div>
       <div ref="hostRef" class="w-full relative" />
     </div>

@@ -115,6 +115,18 @@ export const SIGNALS: Record<string, SignalDef> = {
     ],
   },
 
+  // Pre-filter gyro per axis. Channels 0/1/2 = roll/pitch/yaw raw
+  // sensor reading before BF's filter chain. Used by the Spectrum tab
+  // to overlay pre- vs post-filter gyro so the user can see exactly
+  // what the filter chain is removing. Debug-mode-only via GYRO_RAW.
+  gyro_raw: {
+    id: 'gyro_raw',
+    perAxis: true,
+    sources: (axis) => [
+      { kind: 'debug', mode: 'GYRO_RAW', channel: axis as number },
+    ],
+  },
+
   // SPA per-axis attenuation multiplier. Debug-mode source only;
   // not exposed as a main-frame field (config-only header fields
   // `spa_center` / `spa_width` / `spa_mode` describe the curve but
