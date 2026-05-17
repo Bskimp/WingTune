@@ -33,6 +33,7 @@ const BASE_TABS: TabSpec[] = [
   { id: 'tracking', label: 'Tracking' },
   { id: 'servos',   label: 'Servos' },
   { id: 'airspeed', label: 'Airspeed' },
+  { id: 'tpa',      label: 'TPA' },
   { id: 'spa',      label: 'SPA' },
   { id: 'sterm',    label: 'S-Term' },
   { id: 'spectrum', label: 'Spectrum' },

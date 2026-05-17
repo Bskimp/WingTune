@@ -36,6 +36,10 @@ import {
   spaRecommender,
   spaRequiredFields,
 } from '@/lib/recommenders/spa';
+import {
+  tpaCurveRecommender,
+  tpaCurveRequiredFields,
+} from '@/lib/recommenders/tpaCurve';
 
 /** UI severity — the "should I care" axis, distinct from confidence
  *  (the "is this rec trustworthy" axis). A high-severity low-
@@ -121,6 +125,7 @@ export const ALL_RECOMMENDER_REQUIRED_FIELDS: readonly string[] = [
   ...airspeedBasicRequiredFields,
   ...spectrumFilterRequiredFields,
   ...spaRequiredFields,
+  ...tpaCurveRequiredFields,
 ];
 
 export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
@@ -130,6 +135,7 @@ export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
   for (const rec of airspeedBasicRecommender(args)) recs.push(rec);
   for (const rec of spectrumFilterRecommender(args)) recs.push(rec);
   for (const rec of spaRecommender(args)) recs.push(rec);
+  for (const rec of tpaCurveRecommender(args)) recs.push(rec);
   // future: stepResponseOvershoot, servoSaturation, … each just appended here.
   return recs;
 }

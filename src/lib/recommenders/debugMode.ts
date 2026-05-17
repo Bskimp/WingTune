@@ -34,21 +34,22 @@ function anyBlocked(perAxis: { roll: Capability; pitch: Capability; yaw: Capabil
 
 const SPECS: RecSpec[] = [
   {
-    mode: 'WING_SETPOINT',
-    moduleLabel: 'TPA curve fit',
-    unlocks: ['TPA curve fit'],
-    isBlocked: (m) => m.tpaCurveFit.state === 'blocked',
-  },
-  {
     mode: 'TPA',
-    moduleLabel: 'DEBUG_TPA cross-check',
-    unlocks: ['firmware-estimator cross-check on the BASIC airspeed fit'],
-    // Pre-split this checked `airspeedAutoTune.state === 'blocked'`,
-    // which only fired when GPS was missing — but setting `debug_mode = TPA`
-    // doesn't fix missing GPS. Now we trigger on the actual DEBUG_TPA-missing
-    // condition (tpaCrossCheck blocked), which is the case `set debug_mode = TPA`
-    // actually addresses.
-    isBlocked: (m) => m.airspeedAutoTune.tpaCrossCheck.state === 'blocked',
+    // DEBUG_TPA unlocks BOTH the BASIC airspeed cross-check AND the
+    // M5 HYPERBOLIC TPA curve fit (both read tpa_arg / tpa_factor
+    // straight off this mode). The previous WING_SETPOINT spec was
+    // stale — the prior `checkTpaCurveFit` derived tpa_factor as
+    // adjusted_setpoint/pre_setpoint, but per BF PR #13805 the
+    // factor is logged directly as a DEBUG_TPA channel, so we don't
+    // need WING_SETPOINT for the curve fit at all.
+    moduleLabel: 'DEBUG_TPA analyses',
+    unlocks: [
+      'firmware-estimator cross-check on the BASIC airspeed fit',
+      'M5 HYPERBOLIC TPA curve fit',
+    ],
+    isBlocked: (m) =>
+      m.airspeedAutoTune.tpaCrossCheck.state === 'blocked' ||
+      m.tpaCurveFit.state === 'blocked',
   },
   {
     mode: 'SPA',

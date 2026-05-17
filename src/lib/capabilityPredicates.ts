@@ -171,44 +171,29 @@ function combineVia(
   return vias.every((v) => v === first) ? first : 'mixed';
 }
 
-/** TPA curve fit derives the applied TPA factor from the ratio of
- *  post-TPA setpoint over pre-TPA setpoint per axis. Needs the
- *  WING_SETPOINT debug-mode pair (pre_tpa_setpoint + adjusted_setpoint)
- *  on at least one axis. BF does not log `tpaFactor` as a discrete
- *  field — it's internal `pidRuntime.tpaFactor`. */
+/** TPA curve fit reads `tpa_arg` (curve input) + `tpa_factor` (curve
+ *  output) directly from the DEBUG_TPA channel pair, and fits the
+ *  HYPERBOLIC curve formula from BF PR #13805 against the scatter
+ *  (see docs/firmware-reference/tpa-hyperbolic-spec.md). Both signals
+ *  share the same `debug_mode = TPA` requirement, so this collapses
+ *  to a single signal-pair check on the M3 setup. */
 export function checkTpaCurveFit(capability: CapabilityReport): Capability {
-  // Check all three axes; available if any axis resolves both signals.
-  const axisChecks = ([0, 1, 2] as const).map((axis) => {
-    const pre  = resolveSignal('pre_tpa_setpoint', axis, capability);
-    const adj  = resolveSignal('adjusted_setpoint', axis, capability);
-    return { axis, pre, adj };
-  });
-  const anyAvailable = axisChecks.some(
-    (c) => c.pre.state === 'resolved' && c.adj.state === 'resolved',
-  );
-  if (!anyAvailable) {
+  const arg    = resolveSignal('tpa_arg', null, capability);
+  const factor = resolveSignal('tpa_factor', null, capability);
+  if (arg.state === 'missing' || factor.state === 'missing') {
     return {
       state: 'blocked',
-      reason: 'set `debug_mode = WING_SETPOINT` in BF to log pre-/post-TPA setpoint per axis',
+      reason: 'set `debug_mode = TPA` in BF to log `tpa_arg` + `tpa_factor` (M5 fits the curve from this scatter)',
     };
   }
-  const anyMissing = axisChecks.some(
-    (c) => c.pre.state === 'missing' || c.adj.state === 'missing',
-  );
-  // Pick a `via` from any resolved channel — all WING_SETPOINT channels
-  // come from the same source, so they agree.
-  const firstResolved = axisChecks.find(
-    (c) => c.pre.state === 'resolved' && c.adj.state === 'resolved',
-  )!;
-  const via = firstResolved.pre.state === 'resolved' ? firstResolved.pre.via : undefined;
-  if (anyMissing) {
+  if (arg.state === 'inactive' || factor.state === 'inactive') {
     return {
-      state: 'partial',
-      reason: 'WING_SETPOINT resolves on some axes but not all — set `debug_mode = WING_SETPOINT` in BF and re-fly to cover every axis',
-      via,
+      state: 'inactive',
+      reason: 'DEBUG_TPA channels logged but always zero — check `gps_use_3d_speed = ON` in BF',
+      via: combineVia([arg.via, factor.via]),
     };
   }
-  return { state: 'available', via };
+  return { state: 'available', via: combineVia([arg.via, factor.via]) };
 }
 
 /** Airspeed BASIC fit — can the M3 BASIC airspeed model fit run on

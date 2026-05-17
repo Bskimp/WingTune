@@ -115,6 +115,23 @@ export const SIGNALS: Record<string, SignalDef> = {
     ],
   },
 
+  // TPA factor — the curve OUTPUT applied multiplicatively to PID
+  // gains. Paired with `tpa_arg` (curve input) to fit the HYPERBOLIC
+  // curve in M5. Per PR #13805 + the existing wing-support YAML this
+  // ships as a DEBUG_TPA channel.
+  //
+  // TODO verify exact DEBUG_TPA channel index — best guess channel 2
+  // (tpa_speed_est = 0, tpa_arg = 1, tpa_factor = 2 is the natural
+  // ordering and matches BF's `debug_set` pattern for TPA). Brian to
+  // confirm once a clean DEBUG_TPA wing log is available.
+  tpa_factor: {
+    id: 'tpa_factor',
+    perAxis: false,
+    sources: () => [
+      { kind: 'debug', mode: 'TPA', channel: 2 },
+    ],
+  },
+
   // Pre-filter gyro per axis. Channels 0/1/2 = roll/pitch/yaw raw
   // sensor reading before BF's filter chain. Used by the Spectrum tab
   // to overlay pre- vs post-filter gyro so the user can see exactly
