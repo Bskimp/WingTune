@@ -29,6 +29,11 @@ import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
 import { useCursorSamples } from '@/composables/useCursorSamples';
 import { nearestTimeIndex } from '@/lib/dtype';
 import { detectSaturation, type SaturationResult } from '@/lib/servoAnalysis';
+import {
+  classifyServos,
+  ROLE_LABELS,
+  type ClassifiedChannel,
+} from '@/lib/servoClassifier';
 
 // Cycle of Blueprint-compatible colors per channel. uPlot needs concrete
 // CSS strings; keep in sync with tailwind.css @theme block. The first
@@ -101,8 +106,14 @@ const channels = computed<ChannelSpec[]>(() => {
 
 async function hydrateAllChannels() {
   const names = channels.value.map((c) => c.fieldName);
-  if (names.length === 0) return;
-  await logStore.ensureFields(names);
+  // Also pull setpoint[0..2] for the correlation-based servo classifier.
+  // These are main-frame fields and present on essentially every wing
+  // log; if any is missing the classifier falls back to 'unclassified'
+  // which is the honest empty state.
+  const setpointFields = ['setpoint[0]', 'setpoint[1]', 'setpoint[2]'];
+  const all = [...names, ...setpointFields];
+  if (all.length === 0) return;
+  await logStore.ensureFields(all);
 }
 
 onMounted(hydrateAllChannels);
@@ -166,6 +177,68 @@ const saturationByChannel = computed<Map<string, SaturationResult>>(() => {
   });
   return out;
 });
+
+// Classifier: maps every active servo channel to a role with a
+// confidence state. Preset matches → 'confident'; correlation-based
+// → 'inferred' (with score); no signal → 'unclassified'. Motors are
+// never classified (a motor is a motor) — the lookup just skips them.
+const classifications = computed<Map<string, ClassifiedChannel>>(() => {
+  const r = scanReport.value;
+  if (!r) return new Map();
+  // Only classify servo channels — motors don't need it.
+  const servoMap = new Map<string, Float32Array>();
+  activeChannels.value.forEach((c, i) => {
+    if (c.kind !== 'servo') return;
+    const arr = channelArrays.value[i];
+    if (arr && arr.length > 0) servoMap.set(c.fieldName, arr);
+  });
+  if (servoMap.size === 0) return new Map();
+  const setpointRoll  = fields.value.get('setpoint[0]') ?? new Float32Array(0);
+  const setpointPitch = fields.value.get('setpoint[1]') ?? new Float32Array(0);
+  const setpointYaw   = fields.value.get('setpoint[2]') ?? new Float32Array(0);
+  const results = classifyServos({
+    mixerName: r.header_params?.['mixer'] ?? null,
+    servos: servoMap,
+    setpointRoll,
+    setpointPitch,
+    setpointYaw,
+  });
+  const out = new Map<string, ClassifiedChannel>();
+  for (const res of results) out.set(res.fieldName, res);
+  return out;
+});
+
+function labelFor(c: ChannelSpec): string {
+  if (c.kind === 'motor') return `Motor ${c.index}`;
+  const cls = classifications.value.get(c.fieldName);
+  if (!cls || cls.role === 'unknown') return `Servo ${c.index} · unknown`;
+  return `Servo ${c.index} · ${ROLE_LABELS[cls.role]}`;
+}
+
+function confidenceMark(c: ChannelSpec): string {
+  if (c.kind === 'motor') return '';
+  const cls = classifications.value.get(c.fieldName);
+  if (!cls) return '';
+  switch (cls.confidence) {
+    case 'confident':    return '✓';
+    case 'inferred':     return '~';
+    case 'unclassified': return '?';
+  }
+}
+
+function confidenceTitle(c: ChannelSpec): string {
+  if (c.kind === 'motor') return '';
+  const cls = classifications.value.get(c.fieldName);
+  if (!cls) return '';
+  switch (cls.confidence) {
+    case 'confident':
+      return `Confident: matched preset "${cls.presetName ?? 'unknown'}"`;
+    case 'inferred':
+      return `Inferred from setpoint correlation (r = ${cls.correlationScore?.toFixed(2) ?? '?'})`;
+    case 'unclassified':
+      return 'Unclassified — channel did not correlate strongly with any axis';
+  }
+}
 
 // Aggregate "any channel pegged" pct for the header strip.
 const worstSaturationPct = computed(() => {
@@ -296,14 +369,18 @@ const liveSamples = computed<CursorSample[]>(() => {
   if (idx === null) return [];
   return activeChannels.value
     .filter((c) => !hiddenSeries.value.has(c.fieldName))
-    .map((c) => ({
-      label: c.fieldName,
-      value: (fields.value.get(c.fieldName)?.[idx] ?? 0).toFixed(0),
-      tone: c.kind === 'motor' ? 'ok' : 'ink',
-      hint: c.kind === 'motor'
-        ? `Motor channel ${c.index} — raw PWM output (µs)`
-        : `Servo channel ${c.index} — raw PWM output (µs) · role classifier pending (M2)`,
-    }));
+    .map((c) => {
+      const cls = classifications.value.get(c.fieldName);
+      const roleLabel = cls && cls.role !== 'unknown' ? ROLE_LABELS[cls.role] : c.fieldName;
+      return {
+        label: roleLabel,
+        value: (fields.value.get(c.fieldName)?.[idx] ?? 0).toFixed(0),
+        tone: (c.kind === 'motor' ? 'ok' : 'ink') as CursorSample['tone'],
+        hint: c.kind === 'motor'
+          ? `Motor channel ${c.index} — raw PWM output (µs)`
+          : `${c.fieldName} → ${roleLabel} (${cls?.confidence ?? 'unknown'}) — raw PWM output (µs)`,
+      };
+    });
 });
 useCursorSamples({ sourceKey: 'servos', samples: liveSamples });
 
@@ -439,7 +516,9 @@ function resetZoom() {
         :class="hiddenSeries.has(c.fieldName)
           ? 'opacity-40 text-bp-dim line-through'
           : 'opacity-100 text-bp-ink-2 hover:text-bp-ink'"
-        :title="hiddenSeries.has(c.fieldName) ? 'Click to show' : 'Click to hide'"
+        :title="hiddenSeries.has(c.fieldName)
+          ? 'Click to show'
+          : confidenceTitle(c) || 'Click to hide'"
         :aria-pressed="!hiddenSeries.has(c.fieldName)"
         @click="toggleChannel(c.fieldName)"
       >
@@ -448,9 +527,16 @@ function resetZoom() {
           :style="{ background: hiddenSeries.has(c.fieldName) ? 'var(--color-bp-dim)' : c.color }"
         />
         <span class="font-mono">{{ c.fieldName }}</span>
-        <span class="font-sans">
-          · {{ c.kind === 'servo' ? 'unknown' : 'motor' }}
-        </span>
+        <span class="font-sans">· {{ labelFor(c).split('·').pop()?.trim() ?? '' }}</span>
+        <span
+          v-if="confidenceMark(c)"
+          class="font-mono text-[10px]"
+          :class="{
+            'text-bp-ok':   confidenceMark(c) === '✓',
+            'text-bp-warn': confidenceMark(c) === '~',
+            'text-bp-dim':  confidenceMark(c) === '?',
+          }"
+        >{{ confidenceMark(c) }}</span>
       </button>
       <span
         v-if="inactiveCount > 0"
