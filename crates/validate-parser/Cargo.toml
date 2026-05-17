@@ -13,3 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 wingtune-parser = { path = "../wingtune-parser" }
+serde = { version = "1", features = ["derive"] }
+# serde_yml is the actively-maintained fork of the deprecated
+# `serde_yaml`. Same API surface; safer long-term dep choice.
+serde_yml = "0.0.12"

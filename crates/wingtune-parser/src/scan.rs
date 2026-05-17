@@ -159,11 +159,11 @@ pub fn scan_with_progress(
                 time_sec.push(dt_sec);
 
                 if total_frames.is_multiple_of(SAMPLE_STRIDE) {
-                    for i in 0..main_field_count {
-                        if main_nonzero[i] { continue; }
+                    for (i, slot) in main_nonzero.iter_mut().enumerate() {
+                        if *slot { continue; }
                         if let Some(value) = frame.get(i) {
                             if main_value_to_f32(value) != 0.0 {
-                                main_nonzero[i] = true;
+                                *slot = true;
                             }
                         }
                     }
@@ -179,11 +179,11 @@ pub fn scan_with_progress(
             }
             ParserEvent::Gps(frame) => {
                 gps_present = true;
-                for i in 0..gps_field_count {
-                    if gps_nonzero[i] { continue; }
+                for (i, slot) in gps_nonzero.iter_mut().enumerate() {
+                    if *slot { continue; }
                     if let Some(value) = frame.get(i) {
                         if gps_value_to_f32(value) != 0.0 {
-                            gps_nonzero[i] = true;
+                            *slot = true;
                         }
                     }
                 }
