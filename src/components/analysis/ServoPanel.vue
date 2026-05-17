@@ -25,6 +25,7 @@ import type { AlignedData, Options, Series } from 'uplot';
 import { useLogStore } from '@/stores/log';
 import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
+import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
 
 // Cycle of Blueprint-compatible colors per channel. uPlot needs concrete
 // CSS strings; keep in sync with tailwind.css @theme block. The first
@@ -218,6 +219,32 @@ const opts = computed<Options>(() => {
 
 const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
+const { pinnedPx } = useChartPinnedCursor({ plot, host: hostRef });
+
+// --- per-channel toggle ---
+//
+// Hidden state lives in the view store so it survives a tab switch
+// (see view.hiddenSeries). On plot-ready and on hiddenSeries change,
+// imperatively sync uPlot via setSeries — avoids a full opts rebuild
+// + the flicker that'd come with one.
+const { hiddenSeries } = storeToRefs(view);
+
+function syncSeriesVisibility() {
+  const u = plot.instance();
+  if (!u) return;
+  activeChannels.value.forEach((c, i) => {
+    // uPlot series[0] is the x-axis; channel series start at index 1.
+    u.setSeries(i + 1, { show: !hiddenSeries.value.has(c.fieldName) });
+  });
+}
+
+watch(plot.ready, (isReady) => { if (isReady) syncSeriesVisibility(); }, { immediate: true });
+watch(hiddenSeries, syncSeriesVisibility);
+watch(activeChannels, syncSeriesVisibility, { deep: false });
+
+function toggleChannel(fieldName: string) {
+  view.toggleSeries(fieldName);
+}
 
 function resetZoom() {
   plot.resetZoom();
@@ -277,26 +304,42 @@ function resetZoom() {
         <span v-else>channel data not yet available</span>
       </div>
 
-      <div ref="hostRef" class="w-full" />
+      <div ref="hostRef" class="w-full relative">
+        <div
+          v-if="pinnedPx !== null"
+          class="absolute top-0 bottom-0 w-px bg-bp-accent pointer-events-none z-10"
+          :style="{
+            left: `${pinnedPx}px`,
+            boxShadow: '0 0 6px var(--color-bp-accent)',
+          }"
+        />
+      </div>
     </div>
 
     <footer
       class="flex flex-wrap items-center px-3 py-2 gap-x-4 gap-y-1 border-t border-bp-line text-[10.5px]"
     >
-      <span
+      <button
         v-for="c in activeChannels"
         :key="c.fieldName"
-        class="flex items-center gap-1.5 font-sans text-bp-ink-2"
+        type="button"
+        class="flex items-center gap-1.5 font-sans bg-transparent border-0 p-0 cursor-pointer transition-opacity"
+        :class="hiddenSeries.has(c.fieldName)
+          ? 'opacity-40 text-bp-dim line-through'
+          : 'opacity-100 text-bp-ink-2 hover:text-bp-ink'"
+        :title="hiddenSeries.has(c.fieldName) ? 'Click to show' : 'Click to hide'"
+        :aria-pressed="!hiddenSeries.has(c.fieldName)"
+        @click="toggleChannel(c.fieldName)"
       >
         <span
           class="inline-block w-3.5 h-0.5"
-          :style="{ background: c.color }"
+          :style="{ background: hiddenSeries.has(c.fieldName) ? 'var(--color-bp-dim)' : c.color }"
         />
-        <span class="font-mono text-bp-ink-3">{{ c.fieldName }}</span>
-        <span class="font-sans text-bp-dim">
+        <span class="font-mono">{{ c.fieldName }}</span>
+        <span class="font-sans">
           · {{ c.kind === 'servo' ? 'unknown' : 'motor' }}
         </span>
-      </span>
+      </button>
       <span
         v-if="inactiveCount > 0"
         class="font-mono text-[10.5px] text-bp-dim ml-auto"

@@ -23,6 +23,7 @@ import type { AlignedData, Options } from 'uplot';
 import { useLogStore } from '@/stores/log';
 import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
+import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
 import { trackingStats } from '@/lib/trackingStats';
 
 type AxisSpec = {
@@ -139,6 +140,7 @@ const opts = computed<Options>(() => ({
 
 const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
+const { pinnedPx } = useChartPinnedCursor({ plot, host: hostRef });
 
 const stats = computed(() => {
   if (!ready.value) return null;
@@ -224,7 +226,16 @@ function resetZoom() {
         <span v-if="isHydrating">hydrating {{ axisSpec.label.toLowerCase() }} fields…</span>
         <span v-else>{{ axisSpec.label.toLowerCase() }} fields not present in this log</span>
       </div>
-      <div ref="hostRef" class="w-full" />
+      <div ref="hostRef" class="w-full relative">
+        <div
+          v-if="pinnedPx !== null"
+          class="absolute top-0 bottom-0 w-px bg-bp-accent pointer-events-none z-10"
+          :style="{
+            left: `${pinnedPx}px`,
+            boxShadow: '0 0 6px var(--color-bp-accent)',
+          }"
+        />
+      </div>
     </div>
 
     <footer

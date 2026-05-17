@@ -19,7 +19,7 @@
 //     when the second chart lands, push view.cursorTime into uPlot via
 //     `setCursorAtTime()` from a watcher on the consuming component.
 
-import { onBeforeUnmount, onMounted, watch, type Ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue';
 import uPlot, { type AlignedData, type Options } from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 
@@ -30,7 +30,13 @@ export interface UseUPlotArgs {
 }
 
 export interface UseUPlotHandle {
-  /** Pixel x position of a given time value, or `null` if no plot. */
+  /** Reactive: true once the uPlot instance is constructed, false after
+   *  destroy. Consumers that need to recompute things from the plot
+   *  (overlays, derived pixel positions) should watch this so their
+   *  watchers re-fire at mount/rebuild time. */
+  ready: Readonly<Ref<boolean>>;
+  /** Pixel x position of a given time value, or `null` if no plot.
+   *  CSS pixels relative to the host element. */
   timeToPos(t: number): number | null;
   /** Time value at a given pixel x position, or `null` if no plot. */
   posToTime(x: number): number | null;
@@ -49,12 +55,14 @@ export interface UseUPlotHandle {
 export function useUPlot({ target, data, opts }: UseUPlotArgs): UseUPlotHandle {
   let plot: uPlot | null = null;
   let ro: ResizeObserver | null = null;
+  const ready = ref(false);
 
   function destroy() {
     ro?.disconnect();
     ro = null;
     plot?.destroy();
     plot = null;
+    ready.value = false;
   }
 
   function build() {
@@ -72,6 +80,7 @@ export function useUPlot({ target, data, opts }: UseUPlotArgs): UseUPlotHandle {
       });
       ro.observe(el);
     }
+    ready.value = true;
   }
 
   onMounted(build);
@@ -92,6 +101,7 @@ export function useUPlot({ target, data, opts }: UseUPlotArgs): UseUPlotHandle {
   onBeforeUnmount(destroy);
 
   return {
+    ready,
     timeToPos(t) {
       if (!plot) return null;
       return plot.valToPos(t, 'x');

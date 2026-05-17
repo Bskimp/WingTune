@@ -40,6 +40,15 @@ export const useViewStore = defineStore('view', () => {
    *  cross-tab navigation preserve the user's interest point. */
   const cursorPinned = ref(false);
 
+  /** Field names the user has hidden from chart legends (click-to-toggle
+   *  on a series). Lives at the view layer (not per-panel state) so
+   *  hidden channels stay hidden when the user switches tabs and back.
+   *  Session-scoped — not persisted across log loads; resetting per
+   *  craft is a future polish if it turns out to matter. Stored as a
+   *  Set value (replaced wholesale on toggle) so Vue's ref reactivity
+   *  fires on changes. */
+  const hiddenSeries = ref<Set<string>>(new Set());
+
   /** Active workspace identifier — M1.4+ will populate this from the
    *  curated workspace registry. `null` means "no workspace selected yet". */
   const activeWorkspace = ref<string | null>(null);
@@ -78,10 +87,26 @@ export const useViewStore = defineStore('view', () => {
     cursorPinned.value = false;
   }
 
+  /** Flip a series' hidden state. Immutable-update via Set replacement
+   *  so the watcher chain fires (`ref<Set>` doesn't track mutations
+   *  on the contained set object). */
+  function toggleSeries(fieldName: string) {
+    const next = new Set(hiddenSeries.value);
+    if (next.has(fieldName)) next.delete(fieldName);
+    else next.add(fieldName);
+    hiddenSeries.value = next;
+  }
+
+  /** Whether a given series is currently hidden. */
+  function isSeriesHidden(fieldName: string): boolean {
+    return hiddenSeries.value.has(fieldName);
+  }
+
   return {
     activeTab,
     cursorTime,
     cursorPinned,
+    hiddenSeries,
     activeWorkspace,
     scrubStart,
     scrubEnd,
@@ -91,5 +116,7 @@ export const useViewStore = defineStore('view', () => {
     pinCursorAt,
     clearCursorIfNotPinned,
     clearCursor,
+    toggleSeries,
+    isSeriesHidden,
   };
 });

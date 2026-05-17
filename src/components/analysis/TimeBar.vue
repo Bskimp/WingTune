@@ -93,14 +93,20 @@ const cursorLeftPct = computed(() => {
     :class="totalSeconds > 0 ? 'cursor-crosshair' : 'cursor-default'"
     @mousedown="onDown"
   >
-    <!-- minute / interval tick marks -->
+    <!-- minute / interval tick marks. First tick left-aligns to avoid
+         half-clipping its label past the bar's left edge; last tick
+         right-aligns symmetrically; middle ticks center on their stop. -->
     <div
-      v-for="stop in tickStops"
+      v-for="(stop, i) in tickStops"
       :key="stop.seconds"
       class="absolute top-[18px] font-mono text-[9.5px] text-bp-ink-3 pointer-events-none"
       :style="{
         left: totalSeconds > 0 ? `${(stop.seconds / totalSeconds) * 100}%` : '0',
-        transform: 'translateX(-50%)',
+        transform: i === 0
+          ? 'translateX(0)'
+          : i === tickStops.length - 1
+            ? 'translateX(-100%)'
+            : 'translateX(-50%)',
       }"
     >
       {{ stop.label }}
