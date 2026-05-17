@@ -16,10 +16,14 @@ export interface NelderMeadOptions {
   maxIter?: number;
   /** Convergence threshold on max-min simplex value range. Default 1e-7. */
   tolerance?: number;
-  /** Initial simplex perturbation as a fraction of seed magnitude.
-   *  Default 0.1 (so a seed value of 0.5 perturbs ±0.05). For
-   *  near-zero seed components, falls back to absolute 0.05. */
-  initialStep?: number;
+  /** Initial simplex perturbation. Accepts:
+   *    · number  — uniform fraction of |seed| (default 0.1)
+   *    · number[] of length n — per-axis ABSOLUTE step size (used
+   *      verbatim regardless of seed magnitude — useful when params
+   *      live on vastly different scales, e.g. ms vs %).
+   *  For near-zero seed components in the fraction mode, falls back
+   *  to absolute 0.05. */
+  initialStep?: number | readonly number[];
 }
 
 export interface NelderMeadResult {
@@ -52,6 +56,15 @@ export function fitNelderMead(
     return { x: [], loss: cost([]), converged: true, iterations: 0 };
   }
 
+  // Resolve per-axis step sizes. Array form → absolute per-axis;
+  // scalar form → fraction-of-magnitude (with 0.05 floor near zero).
+  const stepFor = (i: number, value: number): number => {
+    if (Array.isArray(initialStep)) return (initialStep as readonly number[])[i];
+    const frac = initialStep as number;
+    const mag = Math.abs(value);
+    return mag > 1e-6 ? frac * mag : 0.05;
+  };
+
   // Build initial simplex: seed plus n perturbations along each axis.
   // (N+1)-vertex form keeps memory/compute proportional to dim.
   const simplex: Vertex[] = [];
@@ -59,9 +72,7 @@ export function fitNelderMead(
   simplex.push({ x: seedArr, loss: cost(seedArr) });
   for (let i = 0; i < n; i++) {
     const v = [...seedArr];
-    const mag = Math.abs(v[i]);
-    const step = mag > 1e-6 ? initialStep * mag : 0.05;
-    v[i] += step;
+    v[i] += stepFor(i, v[i]);
     simplex.push({ x: v, loss: cost(v) });
   }
 

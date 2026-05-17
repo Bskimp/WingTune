@@ -32,11 +32,16 @@
 // in the user-facing CLI ranges. Sample gaps (dt > 1s or non-finite)
 // hold the previous airspeed rather than blowing up.
 //
-// OPTIMIZER: hand-rolled Nelder-Mead simplex. Three params, smooth
-// loss surface, no gradients needed — NM converges in 50–150 iters on
-// typical inputs. Avoids pulling in `ml-levenberg-marquardt` for a
-// 3D problem that doesn't need it.
+// OPTIMIZER: generic Nelder-Mead from `lib/nelderMead.ts`. Three
+// params, smooth loss surface, no gradients needed — NM converges in
+// 50–150 iters on typical inputs. The cost-function wrapper clamps
+// the raw simplex vector to legal CLI ranges before evaluating, so
+// the optimiser can step anywhere without emitting NaN. Initial-step
+// sizes are passed per-axis (250 ms / 12 % / 250 V×100) to reflect
+// the wildly different param scales. Avoids pulling in
+// `ml-levenberg-marquardt` for a 3D problem that doesn't need it.
 
+import { fitNelderMead } from '@/lib/nelderMead';
 import { resampleToTimeAxis } from '@/lib/timeAlign';
 
 const G = 9.81;
@@ -151,29 +156,12 @@ function meanSquaredResidual(params: BasicAirspeedParams, inputs: AirspeedFitInp
   return n > 0 ? ssr / n : Infinity;
 }
 
-interface SimplexPoint {
-  d: number;
-  g: number;
-  v: number;
-  loss: number;
-}
-
-const NM_ALPHA = 1;
-const NM_GAMMA = 2;
-const NM_RHO = 0.5;
-const NM_SIGMA = 0.5;
-
 function clampParams(d: number, g: number, v: number): BasicAirspeedParams {
   return {
     delayMs: Math.max(50, Math.min(5000, d)),
     gravityPct: Math.max(5, Math.min(100, g)),
     maxVoltageX100: Math.max(420, Math.min(8400, v)),
   };
-}
-
-function evalPoint(d: number, g: number, v: number, inputs: AirspeedFitInputs): SimplexPoint {
-  const p = clampParams(d, g, v);
-  return { d: p.delayMs, g: p.gravityPct, v: p.maxVoltageX100, loss: meanSquaredResidual(p, inputs) };
 }
 
 export function fitBasicAirspeedModel(
@@ -183,72 +171,26 @@ export function fitBasicAirspeedModel(
   const init = options.initialParams ?? { delayMs: 1000, gravityPct: 50, maxVoltageX100: 2520 };
   const maxIter = options.maxIterations ?? 250;
 
-  // Initial simplex: seed + 3 perturbations along each parameter axis.
-  const simplex: SimplexPoint[] = [
-    evalPoint(init.delayMs, init.gravityPct, init.maxVoltageX100, inputs),
-    evalPoint(init.delayMs * 1.25, init.gravityPct, init.maxVoltageX100, inputs),
-    evalPoint(init.delayMs, init.gravityPct * 1.25, init.maxVoltageX100, inputs),
-    evalPoint(init.delayMs, init.gravityPct, init.maxVoltageX100 * 1.1, inputs),
-  ];
-  simplex.sort((a, b) => a.loss - b.loss);
+  // Cost wrapper for the generic Nelder-Mead optimiser. Clamps the
+  // raw vector to legal CLI ranges before evaluating — keeps the
+  // optimiser free to step anywhere without producing NaN-prone params.
+  const cost = (vec: number[]): number => {
+    const p = clampParams(vec[0], vec[1], vec[2]);
+    return meanSquaredResidual(p, inputs);
+  };
 
-  let iter = 0;
-  let converged = false;
-  for (; iter < maxIter; iter++) {
-    const best = simplex[0];
-    const worst = simplex[3];
-    const secondWorst = simplex[2];
+  // Per-axis ABSOLUTE initial step sizes (ms / % / V×100). The
+  // previous specialised version used per-axis ratios (×1.25 / ×1.25 /
+  // ×1.1) which work out to roughly the same absolute steps as below
+  // for the default seed. Absolute keeps the simplex sized sensibly
+  // regardless of seed magnitude.
+  const fit = fitNelderMead(
+    [init.delayMs, init.gravityPct, init.maxVoltageX100],
+    cost,
+    { maxIter, initialStep: [250, 12, 250] },
+  );
 
-    // Simplex-size convergence: max coord spread, normalized per-axis.
-    const spread = Math.max(
-      Math.abs(simplex[3].d - simplex[0].d) / 100,
-      Math.abs(simplex[3].g - simplex[0].g) / 10,
-      Math.abs(simplex[3].v - simplex[0].v) / 100,
-    );
-    if (spread < 1e-3) { converged = true; break; }
-
-    // Centroid of the 3 best points.
-    const cd = (simplex[0].d + simplex[1].d + simplex[2].d) / 3;
-    const cg = (simplex[0].g + simplex[1].g + simplex[2].g) / 3;
-    const cv = (simplex[0].v + simplex[1].v + simplex[2].v) / 3;
-
-    // Reflection through centroid.
-    const rd = cd + NM_ALPHA * (cd - worst.d);
-    const rg = cg + NM_ALPHA * (cg - worst.g);
-    const rv = cv + NM_ALPHA * (cv - worst.v);
-    const refl = evalPoint(rd, rg, rv, inputs);
-
-    if (refl.loss >= best.loss && refl.loss < secondWorst.loss) {
-      simplex[3] = refl;
-    } else if (refl.loss < best.loss) {
-      // Expand further along the reflection direction.
-      const ed = cd + NM_GAMMA * (rd - cd);
-      const eg = cg + NM_GAMMA * (rg - cg);
-      const ev = cv + NM_GAMMA * (rv - cv);
-      const exp = evalPoint(ed, eg, ev, inputs);
-      simplex[3] = exp.loss < refl.loss ? exp : refl;
-    } else {
-      // Contract toward centroid.
-      const xd = cd + NM_RHO * (worst.d - cd);
-      const xg = cg + NM_RHO * (worst.g - cg);
-      const xv = cv + NM_RHO * (worst.v - cv);
-      const con = evalPoint(xd, xg, xv, inputs);
-      if (con.loss < worst.loss) {
-        simplex[3] = con;
-      } else {
-        // Shrink the whole simplex toward the best vertex.
-        for (let i = 1; i < 4; i++) {
-          const sd = best.d + NM_SIGMA * (simplex[i].d - best.d);
-          const sg = best.g + NM_SIGMA * (simplex[i].g - best.g);
-          const sv = best.v + NM_SIGMA * (simplex[i].v - best.v);
-          simplex[i] = evalPoint(sd, sg, sv, inputs);
-        }
-      }
-    }
-    simplex.sort((a, b) => a.loss - b.loss);
-  }
-
-  const winner = clampParams(simplex[0].d, simplex[0].g, simplex[0].v);
+  const winner = clampParams(fit.x[0], fit.x[1], fit.x[2]);
   const predicted = integrateBasicAirspeedModel(winner, inputs);
   const residuals = new Float32Array(predicted.length);
 
@@ -277,8 +219,8 @@ export function fitBasicAirspeedModel(
     rSquared,
     rmsResidual,
     coverage: computeCoverage(inputs),
-    iterations: iter,
-    converged,
+    iterations: fit.iterations,
+    converged: fit.converged,
   };
 }
 
