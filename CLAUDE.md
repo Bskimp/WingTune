@@ -9,9 +9,11 @@
 
 Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
 M1 functionally complete (corpus track aside); M2 emission loop
-landed; M3 BASIC airspeed fit + recommender landed (visual validation
-on a clean wing calibration flight still pending); M4 spectrum tab +
-filter analysis + spectrum recommenders landed.
+landed; M3 BASIC airspeed fit + recommender landed; M4 spectrum tab +
+filter analysis + spectrum recommenders landed; M1.5 deeper BBL
+header inspector landed; M-Step closed-loop deconvolution landed.
+Step tab no longer a placeholder. M3 + M4 raw-gyro visual validation
+deferred (need calibration flights with the right debug modes).
 
 **Done:**
 
@@ -124,6 +126,33 @@ filter analysis + spectrum recommenders landed.
   (no CLI — which stage to trim is a judgment call). Pre/post-
   filter gyro overlay closes the loop on visualising what the filter
   chain removes.
+- M1.5 BBL header inspector: `header_params: BTreeMap<String, String>`
+  exposed on ScanReport — every key/value pair BF wrote into the
+  log (~150-250 entries). New `HeaderParamsPanel.vue` on the Summary
+  tab: searchable (key OR value substring), click-to-copy
+  `set key = value` to clipboard with 1.2s accent flash on the
+  copied row. Surfaced a latent serialization bug along the way:
+  serde-wasm-bindgen defaults to serializing Rust maps as JS `Map`
+  (not plain objects), which broke `obj[key]` access and
+  `Object.entries(obj)`. New `js_serializer()` helper in lib.rs
+  forces `.serialize_maps_as_objects(true)` for both scan + hydrate
+  outputs. Latent bug fixes ride along: FieldTable's "all samples
+  zero" status now actually fires for fields like `gps:GPS_velned[2]`,
+  and `checkAirspeedAutoTune` correctly hits the `inactive` branch
+  on logs where GPS frames exist but never locked.
+- M-Step closed-loop deconvolution: `lib/stepResponse.ts` — Wiener
+  deconvolution (`H(f) = G·conj(S)/(|S|²+λ)`, λ = 1% peak |S|²) with
+  Welch-style windowed averaging across overlapping segments. Drops
+  segments below the setpoint-RMS gate (deconvolving against near-
+  zero input amplifies noise). Hand-rolled `ifftInPlace` via the
+  FFT(conj(x))/N trick, no new dependency. Exposed metrics: peak
+  amplitude (>1 = overshoot), peak time, settling time (first
+  crossing of 0.95×finalValue), final value, num kept segments.
+  `StepResponsePanel.vue` is per-axis (PIDtoolbox convention) with
+  R/P/Y selector chips, peak %+settling ms header metrics
+  (traffic-light coloured), reference line at y=1.0 via uPlot draw
+  hook, honest "fly more aggressive manoeuvres" pending state for
+  low-excitation logs. Replaces the M-step TabPlaceholder.
 
 **In flight / pending:**
 
@@ -145,11 +174,15 @@ filter analysis + spectrum recommenders landed.
   assuming BF nose-up positive). Verify against firmware source when
   M5 work begins.
 - M1.0 corpus assembly track (not started).
-- M1.5 log inspector: partially covered by Summary tab's
-  FieldTable + ReadinessCard. A deeper CLI-parameter-dump browser
-  is the gap. Bonus polish queued: field-table sample-count + all-zero
-  indicator for `gps:*` fields (needs `sample_check` populated in
-  `scan.rs` first — currently stubbed to empty `BTreeMap`).
+- Step-response settling-metric refinement: on btfl_002 the reported
+  peak (164 %) and settling (109 ms) didn't visually match the chart
+  curve (peak visually ~155 %, response crossed 0.95·finalValue
+  around 220 ms). Possible causes: cumsum edge artifact, finalValue
+  tail-window edge case, or Hann coherent-gain interaction in the
+  amplitude scaling. Math is roughly correct (synthetic first-order
+  tests pass) but absolute calibration may want refining. Worth a
+  pass when comparing against PIDtoolbox reference numbers on the
+  same log.
 - M1.7 multi-log + alignment (not started).
 - Scan-progress streaming UX (indeterminate striped bar today;
   real % needs Layer 1 worker progress messages).
