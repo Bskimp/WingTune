@@ -177,26 +177,46 @@ export class ParserClient {
     return { ...raw, time_sec: Float32Array.from(raw.time_sec) };
   }
 
-  /** Hydrate the named fields. Returns a `Map<name, Float32Array>` where
-   *  each entry is one field's value-per-frame. Requires a prior `scan()`
-   *  so the worker has the log bytes cached.
+  /** Hydrate the named fields. Returns `{ fields, gpsTimesSec }`:
+   *
+   *   - `fields` — `Map<name, Float32Array>` of one value-per-frame per
+   *     requested id. Main-frame fields align with `scanReport.time_sec`.
+   *     GPS fields (caller passes a `gps:`-prefixed name, matching how
+   *     `scanReport.capability.fields_present` surfaces them) align with
+   *     `gpsTimesSec` — main and GPS frames fire at different rates.
+   *   - `gpsTimesSec` — per-GPS-frame timestamps in seconds since the
+   *     first main frame. Empty when no `gps:` field was hydrated.
    *
    *  Fields not present in the log come back as empty `Float32Array`s
    *  (callers should check `.length === 0` to distinguish from "field
-   *  exists but had no samples"). M1.3.2 re-iterates the full log per
-   *  call; the `FrameIndex` seek-skip optimization is a follow-up. */
-  async hydrate(fieldIds: string[]): Promise<Map<string, Float32Array>> {
-    const raw = await call<Array<[string, number[]]>>({
+   *  exists but had no samples"). The implementation re-iterates the
+   *  full log per call; the `FrameIndex` seek-skip optimization is a
+   *  follow-up. */
+  async hydrate(fieldIds: string[]): Promise<HydrateResult> {
+    const raw = await call<{
+      fields: Array<[string, number[]]>;
+      gps_times_sec: number[];
+    }>({
       type: 'hydrate',
       fieldIds,
     });
     // serde-wasm-bindgen renders Vec<(String, Vec<f32>)> as an array of
     // [name, array] pairs. Convert each value array to Float32Array at
     // the Layer 1 boundary so Layer 2/3 never sees plain `number[]`.
-    const out = new Map<string, Float32Array>();
-    for (const [name, values] of raw) {
-      out.set(name, Float32Array.from(values));
+    const fields = new Map<string, Float32Array>();
+    for (const [name, values] of raw.fields) {
+      fields.set(name, Float32Array.from(values));
     }
-    return out;
+    return { fields, gpsTimesSec: Float32Array.from(raw.gps_times_sec) };
   }
+}
+
+export interface HydrateResult {
+  /** field name → typed array of one value per frame. Names without
+   *  the `gps:` prefix align with the scan report's `time_sec` axis;
+   *  GPS-prefixed names align with `gpsTimesSec`. */
+  fields: Map<string, Float32Array>;
+  /** Per-GPS-frame timestamps in seconds since the first main frame.
+   *  Empty when no `gps:` field was requested. */
+  gpsTimesSec: Float32Array;
 }

@@ -2,7 +2,8 @@
 // Outer wrapper for the post-load analysis screen.
 //
 //   ┌─ AppHeader ──────────────────────────────────────────────────────┐
-//   │ TabBar (Summary / Tracking / Spectrum / Step / Recommend·N)      │
+//   │ TabBar (Summary / Tracking / Servos / Airspeed / Spectrum /      │
+//   │         Step / Recommend·N)                                      │
 //   │ TimeBar (click-to-pin cursor anchor)                             │
 //   │ CursorReadout (values @ cursor — empty hint otherwise)           │
 //   │ <active tab content>                                             │
@@ -33,6 +34,7 @@ import TimeBar from '@/components/analysis/TimeBar.vue';
 import CursorReadout from '@/components/analysis/CursorReadout.vue';
 import TrackingTab from '@/components/analysis/TrackingTab.vue';
 import ServosTab from '@/components/analysis/ServosTab.vue';
+import AirspeedPanel from '@/components/analysis/AirspeedPanel.vue';
 import RecommendTab from '@/components/analysis/RecommendTab.vue';
 import TabPlaceholder from '@/components/analysis/TabPlaceholder.vue';
 import CapabilitySummary from '@/components/CapabilitySummary.vue';
@@ -72,6 +74,7 @@ watch(
       <CapabilitySummary v-if="activeTab === 'summary'" />
       <TrackingTab v-else-if="activeTab === 'tracking'" />
       <ServosTab v-else-if="activeTab === 'servos'" />
+      <AirspeedPanel v-else-if="activeTab === 'airspeed'" />
       <TabPlaceholder
         v-else-if="activeTab === 'spectrum'"
         tab="Spectrum"

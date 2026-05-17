@@ -76,10 +76,8 @@ export type ResolveResult =
 // repo, not WingTune. Tracked as a follow-up slice.
 //
 // Not represented here:
-//   · tpa_speed_est / tpa_arg — internal `pidRuntime.tpaFactor`; not
-//     directly logged anywhere in BF. Derivable from WING_SETPOINT
-//     channels (post/pre ratio gives the applied TPA factor) but
-//     that's analytics-layer work, not a signal lookup.
+//   · The applied TPA factor (post/pre setpoint ratio) — derivable
+//     from WING_SETPOINT channels in analytics, not a signal lookup.
 
 export const SIGNALS: Record<string, SignalDef> = {
   // Airspeed estimator output (PR #13895). Active whenever
@@ -98,6 +96,22 @@ export const SIGNALS: Record<string, SignalDef> = {
     perAxis: false,
     sources: () => [
       { kind: 'debug', mode: 'TPA', channel: 0 },
+    ],
+  },
+
+  // TPA argument — the final scaling argument BF feeds into the TPA
+  // curve (clamped 0..1). M3's fit needs this alongside the speed
+  // estimate so the curve can be characterised independently of the
+  // raw speed channel. Debug-mode-only via TPA.
+  //
+  // TODO verify exact DEBUG_TPA channel index — best guess channel 1.
+  // See `project-bf-wing-debug-modes` memory for the channel layout
+  // once it's pinned against the BF source.
+  tpa_arg: {
+    id: 'tpa_arg',
+    perAxis: false,
+    sources: () => [
+      { kind: 'debug', mode: 'TPA', channel: 1 },
     ],
   },
 

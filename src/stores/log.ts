@@ -26,6 +26,12 @@ export const useLogStore = defineStore('log', () => {
   // every sample.
   const time = shallowRef<Float32Array>(new Float32Array(0));
 
+  // GPS-frame time axis (seconds since first main frame). Populated when
+  // a `gps:`-prefixed field is hydrated; stays at length-0 otherwise.
+  // GPS fields align to THIS axis, not `time` — analytics modules use
+  // `lib/timeAlign.ts:resampleToTimeAxis` to project onto `time`.
+  const gpsTimeSec = shallowRef<Float32Array>(new Float32Array(0));
+
   // Hydrated fields keyed by name. `shallowReactive` so add/remove triggers
   // reactivity without deep-wrapping the typed arrays themselves.
   const fields = shallowReactive<Map<string, Float32Array>>(new Map());
@@ -51,6 +57,7 @@ export const useLogStore = defineStore('log', () => {
     scanReport.value = null;
     scanError.value = null;
     time.value = new Float32Array(0);
+    gpsTimeSec.value = new Float32Array(0);
     fields.clear();
     hydrating.clear();
     events.value = [];
@@ -101,8 +108,14 @@ export const useLogStore = defineStore('log', () => {
     for (const n of missing) hydrating.add(n);
     try {
       const hydrated = await client.hydrate(missing);
-      for (const [name, arr] of hydrated) {
+      for (const [name, arr] of hydrated.fields) {
         fields.set(name, arr);
+      }
+      // Capture the GPS time axis whenever a hydrate call requested any
+      // gps: field. Subsequent hydrate calls for other gps: fields would
+      // re-produce identical axis values, so overwriting is safe.
+      if (hydrated.gpsTimesSec.length > 0) {
+        gpsTimeSec.value = hydrated.gpsTimesSec;
       }
     } finally {
       for (const n of missing) hydrating.delete(n);
@@ -114,6 +127,7 @@ export const useLogStore = defineStore('log', () => {
     scanning,
     scanError,
     time,
+    gpsTimeSec,
     fields,
     hydrating,
     events,

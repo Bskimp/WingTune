@@ -11,7 +11,7 @@ pub mod scan;
 
 pub use capability::{CapabilityReport, FrameIndex, SampleCheck, VoltageSagSummary};
 pub use event::EventFrame;
-pub use hydrate::{hydrate as hydrate_impl, HydrateError};
+pub use hydrate::{hydrate as hydrate_impl, HydrateError, HydrateResult};
 pub use scan::{scan, ScanError, ScanReport};
 
 use wasm_bindgen::prelude::*;
@@ -39,19 +39,15 @@ pub fn scan_log(bytes: &[u8]) -> Result<JsValue, JsValue> {
 }
 
 /// Hydrate the named fields and return them to JS. Bytes are re-iterated
-/// from the start; M1.3.2 doesn't use the `FrameIndex` seek hints yet.
-/// Returns `{ name → [f32, …] }` shape (object with array values) via
-/// serde-wasm-bindgen; the bridge converts to `Map<string, Float32Array>`.
+/// from the start; `FrameIndex` seek hints are still unused. Returns a
+/// `HydrateResult` (struct with `fields` + `gps_times_sec`) so the bridge
+/// can rebuild both axes; the JS side converts to typed arrays at the
+/// boundary.
 #[wasm_bindgen(js_name = hydrate)]
 pub fn hydrate(bytes: &[u8], field_ids: Vec<String>) -> Result<JsValue, JsValue> {
     match hydrate::hydrate(bytes, &field_ids) {
-        Ok(pairs) => {
-            // Build a Vec<(String, Vec<f32>)> — serde-wasm-bindgen renders
-            // this as a plain object `{ field_name: [...] }`. We don't use
-            // HashMap because field order matters to some callers.
-            serde_wasm_bindgen::to_value(&pairs)
-                .map_err(|e| JsValue::from_str(&format!("serialize hydrate: {e}")))
-        }
+        Ok(result) => serde_wasm_bindgen::to_value(&result)
+            .map_err(|e| JsValue::from_str(&format!("serialize hydrate: {e}"))),
         Err(err) => Err(serde_wasm_bindgen::to_value(&err)
             .unwrap_or_else(|_| JsValue::from_str("hydrate: unserializable error"))),
     }
@@ -168,9 +164,9 @@ mod tests {
         if sample_fields.is_empty() {
             return;
         }
-        let pairs = hydrate_impl(&bytes, &sample_fields).expect("hydrate");
-        assert_eq!(pairs.len(), sample_fields.len());
-        for (name, values) in &pairs {
+        let result = hydrate_impl(&bytes, &sample_fields).expect("hydrate");
+        assert_eq!(result.fields.len(), sample_fields.len());
+        for (name, values) in &result.fields {
             assert_eq!(
                 values.len() as u64,
                 report.capability.total_frames,
@@ -179,12 +175,42 @@ mod tests {
         }
         eprintln!(
             "hydrate(WINGTUNE_TEST_LOG): {} fields, first sample of each: {:?}",
-            pairs.len(),
-            pairs
+            result.fields.len(),
+            result
+                .fields
                 .iter()
                 .map(|(n, v)| (n.as_str(), v.first().copied().unwrap_or(0.0)))
                 .collect::<Vec<_>>(),
         );
+
+        // When the log has GPS, also exercise the GPS hydration path
+        // and dump GPS_speed stats so we can verify unit scaling.
+        if report.capability.gps_present {
+            let gps_speed_name = String::from("gps:GPS_speed");
+            if report.capability.fields_present.iter().any(|n| n == &gps_speed_name) {
+                let probe = vec![gps_speed_name.clone()];
+                let r = hydrate_impl(&bytes, &probe).expect("hydrate gps speed");
+                let (_, values) = &r.fields[0];
+                assert_eq!(values.len(), r.gps_times_sec.len());
+                let mut min = f32::INFINITY;
+                let mut max = f32::NEG_INFINITY;
+                let mut sum = 0.0_f64;
+                for &v in values.iter() {
+                    if v < min { min = v; }
+                    if v > max { max = v; }
+                    sum += v as f64;
+                }
+                let mean = if values.is_empty() { 0.0 } else { sum / values.len() as f64 };
+                eprintln!(
+                    "hydrate gps:GPS_speed: samples={} window={:.1}..{:.1}s min={:.3} max={:.3} mean={:.3} m/s first5={:?}",
+                    values.len(),
+                    r.gps_times_sec.first().copied().unwrap_or(0.0),
+                    r.gps_times_sec.last().copied().unwrap_or(0.0),
+                    min, max, mean,
+                    values.iter().take(5).copied().collect::<Vec<_>>(),
+                );
+            }
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@ import { gatherRecommendations, type Severity } from '@/lib/recommendations';
 import RecommendList from '@/components/analysis/RecommendList.vue';
 
 const logStore = useLogStore();
-const { scanReport, fields, time } = storeToRefs(logStore);
+const { scanReport, fields, time, gpsTimeSec } = storeToRefs(logStore);
 
 const recs = computed(() => {
   const r = scanReport.value;
@@ -27,6 +27,7 @@ const recs = computed(() => {
     modules,
     fields: fields.value,
     time: time.value,
+    gpsTimeSec: gpsTimeSec.value,
   });
 });
 

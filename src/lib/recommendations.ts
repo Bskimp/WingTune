@@ -24,6 +24,10 @@ import {
   pidfsSharesRecommender,
   pidfsSharesRequiredFields,
 } from '@/lib/recommenders/pidfsShares';
+import {
+  airspeedBasicRecommender,
+  airspeedBasicRequiredFields,
+} from '@/lib/recommenders/airspeedBasic';
 
 /** UI severity — the "should I care" axis, distinct from confidence
  *  (the "is this rec trustworthy" axis). A high-severity low-
@@ -86,6 +90,11 @@ export interface RecommenderArgs {
    *  point time_sec values for the cursor-pin chips. Empty array
    *  before scan completes. */
   time: Float32Array;
+  /** GPS-frame time axis (logStore.gpsTimeSec), Float32 seconds-since-
+   *  first-main-frame. Empty when the log has no GPS frames. Used by
+   *  the airspeed-basic recommender to trim its fit window to where
+   *  GPS data exists. */
+  gpsTimeSec: Float32Array;
 }
 
 export type Recommender = (args: RecommenderArgs) => Recommendation[];
@@ -96,12 +105,14 @@ export type Recommender = (args: RecommenderArgs) => Recommendation[];
 export const ALL_RECOMMENDER_REQUIRED_FIELDS: readonly string[] = [
   ...debugModeRequiredFields,
   ...pidfsSharesRequiredFields,
+  ...airspeedBasicRequiredFields,
 ];
 
 export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
   const recs: Recommendation[] = [];
   for (const rec of debugModeRecommender(args)) recs.push(rec);
   for (const rec of pidfsSharesRecommender(args)) recs.push(rec);
+  for (const rec of airspeedBasicRecommender(args)) recs.push(rec);
   // future: dynamicNotchCoverage, filterDelayBudget,
   // stepResponseOvershoot, servoSaturation, … each just appended here.
   return recs;

@@ -22,7 +22,7 @@ const view = useViewStore();
 const { activeTab } = storeToRefs(view);
 
 const logStore = useLogStore();
-const { scanReport, fields, time } = storeToRefs(logStore);
+const { scanReport, fields, time, gpsTimeSec } = storeToRefs(logStore);
 
 type TabSpec = { id: AnalysisTab; label: string };
 
@@ -30,6 +30,7 @@ const BASE_TABS: TabSpec[] = [
   { id: 'summary',  label: 'Summary' },
   { id: 'tracking', label: 'Tracking' },
   { id: 'servos',   label: 'Servos' },
+  { id: 'airspeed', label: 'Airspeed' },
   { id: 'spectrum', label: 'Spectrum' },
   { id: 'step',     label: 'Step' },
 ];
@@ -43,6 +44,7 @@ const recCount = computed(() => {
     modules,
     fields: fields.value,
     time: time.value,
+    gpsTimeSec: gpsTimeSec.value,
   }).length;
 });
 
