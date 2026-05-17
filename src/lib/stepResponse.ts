@@ -28,15 +28,27 @@ import { fftInPlace, hannWindow } from '@/lib/spectrum';
 const DEFAULT_SEGMENT_LEN = 2048;
 const DEFAULT_OVERLAP = 0.5;
 const DEFAULT_WINDOW_SEC = 0.5;
-/** Setpoint segments below this RMS (deg/s) are dropped — too quiet to
- *  yield a meaningful inverse. Tuned for wing setpoints (slower
- *  commands than quad sticks); the recommender can override. */
-const DEFAULT_RMS_THRESHOLD = 30;
-/** Wiener regularization as a fraction of the peak |S(f)|² value
- *  across the segment's spectrum. 1% is the standard textbook choice
- *  for closed-loop sysid; produces stable inverses without smearing
- *  the response curve. */
-const WIENER_LAMBDA_FRAC = 0.01;
+/** Setpoint segments whose peak |value| (deg/s) doesn't clear this gate
+ *  are dropped — no real step occurred in the window, deconvolving
+ *  against cruise trim noise just smears the average. PIDscope uses 20
+ *  deg/s for quads; bumped to 50 for wings since wing setpoints sustain
+ *  larger magnitudes during turns without being step inputs. */
+const DEFAULT_PEAK_THRESHOLD = 50;
+/** Per-segment tail-window quality control: after deconvolution +
+ *  cumsum, the segment's "final value" (mean of the last 10% of the
+ *  output window) must fall in [TAIL_QC_MIN, TAIL_QC_MAX] for the
+ *  segment to be averaged in. A healthy step response settles near 1.0;
+ *  values way outside this band are deconvolution failures (numerical
+ *  blow-up, wrong sign, etc.) that contaminate the average. Range from
+ *  PIDscope's PSstepcalc.m. */
+const TAIL_QC_MIN = 0.5;
+const TAIL_QC_MAX = 3.0;
+/** Wiener regularization, absolute value (not data-scaled). Wing
+ *  setpoints have huge low-freq energy from sustained turn commands,
+ *  so scaling λ to max|S|² makes λ massive in absolute terms and
+ *  swamps the mid-band where step ringing lives. PIDscope reference
+ *  (PSstepcalc.m) uses absolute 1e-4 — kept here for parity. */
+const WIENER_LAMBDA_ABS = 1e-4;
 
 export interface StepResponseResult {
   /** Time axis in seconds, 0..windowSec. */
@@ -45,9 +57,10 @@ export interface StepResponseResult {
    *  ratio: ideal closed-loop response is 1.0 throughout (perfect
    *  tracking). Values > 1.0 indicate overshoot; < 1.0 sluggish. */
   response: Float32Array;
-  /** Segments that passed the setpoint-RMS gate and contributed to
-   *  the averaged response. Zero means the gyro/setpoint pair never
-   *  had enough excitation to deconvolve cleanly. */
+  /** Segments that passed both the setpoint-peak gate and the
+   *  per-segment tail-window QC, and contributed to the averaged
+   *  response. Zero means no window in the flight had a real step
+   *  AND a clean deconvolution — fly more aggressive manoeuvres. */
   numSegments: number;
   /** Peak amplitude reached during the window (proxy for overshoot
    *  if > 1.0). */
@@ -80,20 +93,20 @@ export function ifftInPlace(re: Float32Array, im: Float32Array): void {
   }
 }
 
-function segmentRms(arr: Float32Array, start: number, len: number): number {
-  let sum = 0;
+function segmentMaxAbs(arr: Float32Array, start: number, len: number): number {
+  let maxAbs = 0;
   for (let i = 0; i < len; i++) {
-    const v = arr[start + i];
-    sum += v * v;
+    const a = Math.abs(arr[start + i]);
+    if (a > maxAbs) maxAbs = a;
   }
-  return Math.sqrt(sum / len);
+  return maxAbs;
 }
 
 export interface ComputeStepResponseOptions {
   segmentLen?: number;
   overlap?: number;
   windowSec?: number;
-  setpointRmsThreshold?: number;
+  setpointPeakThreshold?: number;
 }
 
 export function computeStepResponse(
@@ -105,7 +118,7 @@ export function computeStepResponse(
   const segmentLen = options.segmentLen ?? DEFAULT_SEGMENT_LEN;
   const overlap = options.overlap ?? DEFAULT_OVERLAP;
   const windowSec = options.windowSec ?? DEFAULT_WINDOW_SEC;
-  const rmsThreshold = options.setpointRmsThreshold ?? DEFAULT_RMS_THRESHOLD;
+  const peakThreshold = options.setpointPeakThreshold ?? DEFAULT_PEAK_THRESHOLD;
 
   if (segmentLen < 2 || (segmentLen & (segmentLen - 1)) !== 0) {
     throw new Error(`computeStepResponse: segmentLen must be a power of 2, got ${segmentLen}`);
@@ -132,8 +145,17 @@ export function computeStepResponse(
   const step = Math.max(1, Math.floor(segmentLen * (1 - overlap)));
   const window = hannWindow(segmentLen);
 
-  // Accumulator for averaged step response.
-  const accumImpulse = new Float64Array(segmentLen);
+  // Accumulator for averaged step response (step-domain, not impulse).
+  // Per-segment we cumsum the impulse to a step then tail-QC before
+  // adding in — segments whose deconvolution blew up (settled outside
+  // [TAIL_QC_MIN, TAIL_QC_MAX]) are rejected so they don't contaminate
+  // the average. Mirrors PIDscope PSstepcalc.m's per-segment QC.
+  const accumStep = new Float64Array(windowSamples);
+  const stepSeg = new Float32Array(windowSamples);
+
+  // Tail window for per-segment QC: last 10% of the output window.
+  const tailStart = Math.max(0, windowSamples - Math.max(1, Math.floor(windowSamples * 0.1)));
+  const tailLen = windowSamples - tailStart;
 
   // Reusable per-segment buffers.
   const sRe = new Float32Array(segmentLen);
@@ -145,7 +167,7 @@ export function computeStepResponse(
 
   let numSegments = 0;
   for (let start = 0; start + segmentLen <= setpoint.length; start += step) {
-    if (segmentRms(setpoint, start, segmentLen) < rmsThreshold) continue;
+    if (segmentMaxAbs(setpoint, start, segmentLen) < peakThreshold) continue;
 
     for (let i = 0; i < segmentLen; i++) {
       const w = window[i];
@@ -157,14 +179,15 @@ export function computeStepResponse(
     fftInPlace(sRe, sIm);
     fftInPlace(gRe, gIm);
 
-    // Wiener regularization: λ = WIENER_LAMBDA_FRAC × max |S(f)|².
+    // Wiener regularization: absolute constant (see WIENER_LAMBDA_ABS).
+    // Still skip segments with zero spectral energy.
     let sMaxSq = 0;
     for (let i = 0; i < segmentLen; i++) {
       const m = sRe[i] * sRe[i] + sIm[i] * sIm[i];
       if (m > sMaxSq) sMaxSq = m;
     }
     if (sMaxSq <= 0) continue;
-    const lambda = WIENER_LAMBDA_FRAC * sMaxSq;
+    const lambda = WIENER_LAMBDA_ABS;
 
     // H(f) = G(f) · conj(S(f)) / (|S(f)|² + λ).
     // Note: conj(S) = (sRe, -sIm); (gRe + i·gIm)(sRe - i·sIm) =
@@ -176,26 +199,30 @@ export function computeStepResponse(
     }
     ifftInPlace(hRe, hIm);
 
-    // Accumulate impulse response (real part only — imag is round-off).
-    for (let i = 0; i < segmentLen; i++) accumImpulse[i] += hRe[i];
+    // Cumsum impulse to step (first windowSamples only — beyond that
+    // is wraparound noise we don't display anyway).
+    let acc = 0;
+    for (let i = 0; i < windowSamples; i++) {
+      acc += hRe[i];
+      stepSeg[i] = acc;
+    }
+
+    // Per-segment tail QC: reject if final value is outside the sane band.
+    let tailSum = 0;
+    for (let i = tailStart; i < windowSamples; i++) tailSum += stepSeg[i];
+    const segFinalValue = tailSum / tailLen;
+    if (segFinalValue < TAIL_QC_MIN || segFinalValue > TAIL_QC_MAX) continue;
+
+    for (let i = 0; i < windowSamples; i++) accumStep[i] += stepSeg[i];
     numSegments++;
   }
 
   if (numSegments === 0) return empty();
 
-  // Average impulse response across segments + cumulative-sum to step.
-  // Hann window scaling: integrating cumsum of a windowed impulse
-  // response under-estimates final value by the window's coherent
-  // gain. Compensate so steady-state reads as ~1.0 for a perfect
-  // tracker. Hann coherent gain = sum(window) / N = 0.5; the
-  // deconvolved impulse is already symmetric so its cumsum naturally
-  // doubles back through the gain — net correction factor 2.0 (the
-  // 1/coherent-gain for Hann).
+  // Average step responses across kept segments.
   const invNum = 1 / numSegments;
-  let acc = 0;
   for (let i = 0; i < windowSamples; i++) {
-    acc += (accumImpulse[i] * invNum) * 2;  // ×2 = 1/Hann-coherent-gain
-    response[i] = acc;
+    response[i] = accumStep[i] * invNum;
   }
 
   // Metrics.
@@ -207,11 +234,11 @@ export function computeStepResponse(
       peakIdx = i;
     }
   }
-  // Final-value: average over last 10% of window.
-  const tailStart = Math.max(0, windowSamples - Math.max(1, Math.floor(windowSamples * 0.1)));
+  // Final-value: average over last 10% of window (tailStart computed
+  // earlier so per-segment QC could use the same window).
   let tailSum = 0;
   for (let i = tailStart; i < windowSamples; i++) tailSum += response[i];
-  const finalValue = tailSum / Math.max(1, windowSamples - tailStart);
+  const finalValue = tailSum / Math.max(1, tailLen);
 
   // Settling: first time the response stays within 95-105% of finalValue
   // for the rest of the window. Simpler approximation: first crossing

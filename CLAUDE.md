@@ -174,15 +174,35 @@ deferred (need calibration flights with the right debug modes).
   assuming BF nose-up positive). Verify against firmware source when
   M5 work begins.
 - M1.0 corpus assembly track (not started).
-- Step-response settling-metric refinement: on btfl_002 the reported
-  peak (164 %) and settling (109 ms) didn't visually match the chart
-  curve (peak visually ~155 %, response crossed 0.95·finalValue
-  around 220 ms). Possible causes: cumsum edge artifact, finalValue
-  tail-window edge case, or Hann coherent-gain interaction in the
-  amplitude scaling. Math is roughly correct (synthetic first-order
-  tests pass) but absolute calibration may want refining. Worth a
-  pass when comparing against PIDtoolbox reference numbers on the
-  same log.
+- Step-response calibration vs PIDtoolbox / PIDscope: three algorithmic
+  fixes shipped 2026-05-17 after a side-by-side with PIDtoolbox on
+  btfl_002 showed our curve was a smooth ramp where theirs had
+  ringing. Per a research pass against the PIDscope reference fork
+  (GPL-3, PSstepcalc.m):
+    · Dropped the spurious ×2 "Hann coherent-gain correction" in the
+      cumsum — when num + denom share the same window the gain
+      cancels in the Wiener ratio. Peak halved as predicted.
+    · Switched Wiener λ from data-scaled (`0.01 × max|S|²`) to absolute
+      (`1e-4`, PIDscope value). Wing setpoints have huge low-freq
+      energy from sustained turn commands, which made our scaled λ
+      massive and killed mid-band ringing. Ringing returned
+      immediately.
+    · Replaced setpoint-RMS gate with setpoint-peak gate (50 deg/s) +
+      per-segment cumsum + tail-window QC band [0.5, 3.0]. Rejects
+      cruise-trim segments and blown-up deconvolutions before they
+      pollute the average. Segments dropped 22 → 13.
+  Result on btfl_002: shape character now matches PIDtoolbox (ringy
+  oscillation, not smooth ramp), but amplitude still inflated (peak
+  335 % vs PIDtoolbox's 130 %, 13 segments vs their n=2). Remaining
+  gap is calibration — likely tail-QC band too wide ([0.5, 3.0] lets
+  segments with tail-mean 2.5 contribute), segment length too short
+  (0.5 s vs PIDscope's 2 s — doesn't capture full settling), or peak
+  gate too permissive. **Next step**: load btfl_002 in PIDscope for
+  ground-truth comparison (PIDscope uses our exact algorithm now).
+  PIDscope wasn't loading logs on Brian's machine 2026-05-17 — revisit
+  when that's fixed. Then dial one of: tighten QC to [0.7, 1.5], bump
+  segmentLen to 8192 (2 s at 4 kHz), or raise peak gate to 80 deg/s —
+  based on which knob PIDscope's output identifies as dominant.
 - M1.7 multi-log + alignment (not started).
 - Scan-progress streaming UX (indeterminate striped bar today;
   real % needs Layer 1 worker progress messages).

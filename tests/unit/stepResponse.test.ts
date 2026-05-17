@@ -90,7 +90,7 @@ describe('computeStepResponse', () => {
     const r = computeStepResponse(setpoint, gyro, sr, {
       segmentLen: 1024,
       windowSec: 0.3,
-      setpointRmsThreshold: 10,
+      setpointPeakThreshold: 10,
     });
     expect(r.numSegments).toBeGreaterThan(0);
     // Final value should be near 1.0 for a perfect first-order tracker.
@@ -107,7 +107,7 @@ describe('computeStepResponse', () => {
     const gyro = new Float32Array(8192);
     const r = computeStepResponse(setpoint, gyro, sr, {
       segmentLen: 1024,
-      setpointRmsThreshold: 5,
+      setpointPeakThreshold: 5,
     });
     expect(r.numSegments).toBe(0);
   });
@@ -123,7 +123,7 @@ describe('computeStepResponse', () => {
     const r = computeStepResponse(setpoint, gyro, sr, {
       segmentLen: 1024,
       windowSec: 0.3,
-      setpointRmsThreshold: 10,
+      setpointPeakThreshold: 10,
     });
     expect(r.peakTimeMs).toBeGreaterThan(0);
     expect(r.peakTimeMs).toBeLessThanOrEqual(300);
