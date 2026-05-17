@@ -35,6 +35,7 @@ import CursorReadout from '@/components/analysis/CursorReadout.vue';
 import TrackingTab from '@/components/analysis/TrackingTab.vue';
 import ServosTab from '@/components/analysis/ServosTab.vue';
 import AirspeedPanel from '@/components/analysis/AirspeedPanel.vue';
+import SpaPanel from '@/components/analysis/SpaPanel.vue';
 import SpectrumPanel from '@/components/analysis/SpectrumPanel.vue';
 import StepResponsePanel from '@/components/analysis/StepResponsePanel.vue';
 import RecommendTab from '@/components/analysis/RecommendTab.vue';
@@ -77,6 +78,7 @@ watch(
       <TrackingTab v-else-if="activeTab === 'tracking'" />
       <ServosTab v-else-if="activeTab === 'servos'" />
       <AirspeedPanel v-else-if="activeTab === 'airspeed'" />
+      <SpaPanel v-else-if="activeTab === 'spa'" />
       <SpectrumPanel v-else-if="activeTab === 'spectrum'" />
       <StepResponsePanel v-else-if="activeTab === 'step'" />
       <RecommendTab v-else-if="activeTab === 'recommend'" />

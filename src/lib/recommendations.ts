@@ -32,6 +32,10 @@ import {
   spectrumFilterRecommender,
   spectrumFilterRequiredFields,
 } from '@/lib/recommenders/spectrumFilter';
+import {
+  spaRecommender,
+  spaRequiredFields,
+} from '@/lib/recommenders/spa';
 
 /** UI severity — the "should I care" axis, distinct from confidence
  *  (the "is this rec trustworthy" axis). A high-severity low-
@@ -116,6 +120,7 @@ export const ALL_RECOMMENDER_REQUIRED_FIELDS: readonly string[] = [
   ...pidfsSharesRequiredFields,
   ...airspeedBasicRequiredFields,
   ...spectrumFilterRequiredFields,
+  ...spaRequiredFields,
 ];
 
 export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
@@ -124,6 +129,7 @@ export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
   for (const rec of pidfsSharesRecommender(args)) recs.push(rec);
   for (const rec of airspeedBasicRecommender(args)) recs.push(rec);
   for (const rec of spectrumFilterRecommender(args)) recs.push(rec);
+  for (const rec of spaRecommender(args)) recs.push(rec);
   // future: stepResponseOvershoot, servoSaturation, … each just appended here.
   return recs;
 }
