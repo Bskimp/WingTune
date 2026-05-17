@@ -36,6 +36,7 @@ export type AnalysisTab =
   | 'servos'
   | 'airspeed'
   | 'spa'
+  | 'sterm'
   | 'spectrum'
   | 'step'
   | 'recommend';
