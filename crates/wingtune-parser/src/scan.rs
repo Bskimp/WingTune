@@ -16,7 +16,8 @@ use blackbox_log::frame::{Frame, FrameDef};
 use serde::{Deserialize, Serialize};
 
 use crate::capability::{
-    CapabilityReport, DynNotchConfig, FilterConfig, FrameIndex, LowPassConfig, SampleCheck,
+    CapabilityReport, DynNotchConfig, FilterConfig, FrameIndex, LowPassConfig, RpmFilterConfig,
+    SampleCheck,
 };
 use crate::event::EventFrame;
 use crate::hydrate::{gps_value_to_f32, main_value_to_f32};
@@ -203,7 +204,19 @@ fn parse_filter_config(unknown: &HashMap<&str, &str>) -> FilterConfig {
         gyro_lpf2:  parse_lpf(unknown, "gyro_lpf2"),
         dterm_lpf1: parse_lpf(unknown, "dterm_lpf1"),
         dterm_lpf2: parse_lpf(unknown, "dterm_lpf2"),
+        rpm_filter: parse_rpm_filter(unknown),
     }
+}
+
+fn parse_rpm_filter(unknown: &HashMap<&str, &str>) -> Option<RpmFilterConfig> {
+    let harmonics = parse_u32(unknown, "rpm_filter_harmonics").unwrap_or(0);
+    if harmonics == 0 { return None; }
+    Some(RpmFilterConfig {
+        harmonics,
+        lpf_hz: parse_u32(unknown, "rpm_filter_lpf_hz").unwrap_or(0),
+        min_hz: parse_u32(unknown, "rpm_filter_min_hz").unwrap_or(0),
+        q:      parse_u32(unknown, "rpm_filter_q").unwrap_or(0),
+    })
 }
 
 fn parse_dyn_notch(unknown: &HashMap<&str, &str>) -> Option<DynNotchConfig> {

@@ -10,8 +10,8 @@ pub mod hydrate;
 pub mod scan;
 
 pub use capability::{
-    CapabilityReport, DynNotchConfig, FilterConfig, FrameIndex, LowPassConfig, SampleCheck,
-    VoltageSagSummary,
+    CapabilityReport, DynNotchConfig, FilterConfig, FrameIndex, LowPassConfig, RpmFilterConfig,
+    SampleCheck, VoltageSagSummary,
 };
 pub use event::EventFrame;
 pub use hydrate::{hydrate as hydrate_impl, HydrateError, HydrateResult};

@@ -18,7 +18,7 @@
 // the notch bank the lowest-frequency notch contributes the most
 // delay so dyn_notch_min_hz is the conservative estimate.
 
-import type { FilterConfig, LowPassConfig, DynNotchConfig } from '@/lib/wasmBridge';
+import type { FilterConfig, LowPassConfig, DynNotchConfig, RpmFilterConfig } from '@/lib/wasmBridge';
 
 export interface FilterStage {
   /** Human-readable label for the budget table (e.g. "gyro LPF1"). */
@@ -84,13 +84,30 @@ function notchStage(dn: DynNotchConfig): FilterStage | null {
   };
 }
 
+function rpmStage(rpm: RpmFilterConfig): FilterStage | null {
+  if (rpm.harmonics <= 0 || rpm.min_hz <= 0) return null;
+  // RPM notches sweep with motor frequency; we estimate worst-case
+  // delay at rpm_filter_min_hz (the lowest frequency BF will place
+  // a notch at). Sum over harmonics.
+  const qActual = rpm.q / 100;
+  const perNotchMs = (qActual / (Math.PI * rpm.min_hz)) * 1000;
+  const totalMs = perNotchMs * rpm.harmonics;
+  return {
+    name: `rpm filter ×${rpm.harmonics}`,
+    detail: `Q=${qActual.toFixed(1)} (≥${rpm.min_hz} Hz, LP ${rpm.lpf_hz} Hz)`,
+    cutoffHz: rpm.min_hz,
+    delayMs: totalMs,
+  };
+}
+
 export function computeDelayBudget(config: FilterConfig): FilterDelayBudget {
   const candidates: Array<FilterStage | null> = [
     lpfStage('gyro LPF1',  config.gyro_lpf1),
     lpfStage('gyro LPF2',  config.gyro_lpf2),
     lpfStage('dterm LPF1', config.dterm_lpf1),
     lpfStage('dterm LPF2', config.dterm_lpf2),
-    config.dyn_notch ? notchStage(config.dyn_notch) : null,
+    config.dyn_notch  ? notchStage(config.dyn_notch)  : null,
+    config.rpm_filter ? rpmStage(config.rpm_filter)   : null,
   ];
   const stages = candidates.filter((s): s is FilterStage => s !== null);
   const totalMs = stages.reduce((sum, s) => sum + s.delayMs, 0);

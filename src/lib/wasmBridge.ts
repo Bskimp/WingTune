@@ -57,12 +57,21 @@ export interface LowPassConfig {
   dyn_max_hz: number | null;
 }
 
+export interface RpmFilterConfig {
+  harmonics: number;
+  lpf_hz:    number;
+  min_hz:    number;
+  /** BF Q × 100 — actual Q is `q / 100`. */
+  q:         number;
+}
+
 export interface FilterConfig {
   dyn_notch:  DynNotchConfig | null;
   gyro_lpf1:  LowPassConfig | null;
   gyro_lpf2:  LowPassConfig | null;
   dterm_lpf1: LowPassConfig | null;
   dterm_lpf2: LowPassConfig | null;
+  rpm_filter: RpmFilterConfig | null;
 }
 
 export type EventFrame =

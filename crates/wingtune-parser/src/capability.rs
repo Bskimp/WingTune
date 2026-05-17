@@ -68,11 +68,28 @@ pub struct FrameIndex {
 /// across BF versions and we want graceful degradation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FilterConfig {
-    pub dyn_notch: Option<DynNotchConfig>,
+    pub dyn_notch:  Option<DynNotchConfig>,
     pub gyro_lpf1:  Option<LowPassConfig>,
     pub gyro_lpf2:  Option<LowPassConfig>,
     pub dterm_lpf1: Option<LowPassConfig>,
     pub dterm_lpf2: Option<LowPassConfig>,
+    pub rpm_filter: Option<RpmFilterConfig>,
+}
+
+/// RPM filter — uses ESC telemetry to track per-motor RPM and apply a
+/// swept notch at the motor frequency + harmonics. Different from the
+/// dyn-notch bank (which hunts peaks in the gyro spectrum).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpmFilterConfig {
+    /// Number of harmonics filtered (1 = fundamental only, 2 = +2nd, …).
+    pub harmonics: u32,
+    /// LP cutoff applied to the RPM signal feed before it's used for
+    /// notch placement — smooths jitter in the motor RPM stream.
+    pub lpf_hz: u32,
+    /// Notches below this frequency are suppressed (idle-RPM floor).
+    pub min_hz: u32,
+    /// Q factor of each notch, BF-encoded ×100 (actual Q = q/100).
+    pub q: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

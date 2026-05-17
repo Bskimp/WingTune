@@ -67,7 +67,44 @@ const delayBudget = computed<FilterDelayBudget | null>(() => {
   return computeDelayBudget(fc);
 });
 
-const overlayEnabled = ref(true);
+type OverlayKey = 'notch' | 'gyro' | 'dterm' | 'rpm';
+
+interface OverlayChip {
+  key: OverlayKey;
+  label: string;
+  color: string;
+  present: boolean;
+}
+
+// Per-filter overlay visibility. Local to this panel (no cross-session
+// persistence needed — re-shows on remount). Default-on so the user
+// sees the filter chain immediately; can be selectively dimmed when
+// debugging specific peaks.
+const overlayShow = ref<Record<OverlayKey, boolean>>({
+  notch: true,
+  gyro:  true,
+  dterm: true,
+  rpm:   true,
+});
+
+const OVERLAY_COLORS: Record<OverlayKey, string> = {
+  notch: '#ffc46a', // warn — dyn notch band
+  gyro:  '#b6c7e0', // ink2 — gyro LPFs
+  dterm: '#7a90b0', // ink3 — dterm LPFs
+  rpm:   '#7ee0a8', // green — rpm filter
+};
+
+const overlayChips = computed<OverlayChip[]>(() => {
+  const fc = filterConfig.value;
+  if (!fc) return [];
+  const all: OverlayChip[] = [
+    { key: 'notch', label: 'notch', color: OVERLAY_COLORS.notch, present: fc.dyn_notch != null },
+    { key: 'gyro',  label: 'gyro',  color: OVERLAY_COLORS.gyro,  present: fc.gyro_lpf1 != null || fc.gyro_lpf2 != null },
+    { key: 'dterm', label: 'dterm', color: OVERLAY_COLORS.dterm, present: fc.dterm_lpf1 != null || fc.dterm_lpf2 != null },
+    { key: 'rpm',   label: 'rpm',   color: OVERLAY_COLORS.rpm,   present: fc.rpm_filter != null },
+  ];
+  return all.filter((c) => c.present);
+});
 
 onMounted(() => {
   logStore.ensureFields(AXES.map((a) => a.field));
@@ -176,15 +213,15 @@ const opts = computed<Options>(() => ({
     },
   ],
   hooks: {
-    // Filter overlay renderer. Reads filterConfig + overlayEnabled at
-    // draw time so toggling the overlay or loading a new log just
-    // needs a plot.redraw() (no full uPlot rebuild). The explicit
-    // watch below does that.
+    // Filter overlay renderer. Reads filterConfig + overlayShow at
+    // draw time so toggling chips or loading a new log just needs a
+    // plot.redraw() (no full uPlot rebuild). The explicit watch below
+    // does that.
     draw: [
       (u) => {
-        if (!overlayEnabled.value) return;
         const fc = filterConfig.value;
         if (!fc) return;
+        const show = overlayShow.value;
         const ctx = u.ctx;
         const top = u.bbox.top;
         const height = u.bbox.height;
@@ -192,7 +229,7 @@ const opts = computed<Options>(() => ({
         ctx.save();
 
         // Dynamic notch coverage band — the range BF scans for peaks.
-        if (fc.dyn_notch && fc.dyn_notch.min_hz > 0 && fc.dyn_notch.max_hz > fc.dyn_notch.min_hz) {
+        if (show.notch && fc.dyn_notch && fc.dyn_notch.min_hz > 0 && fc.dyn_notch.max_hz > fc.dyn_notch.min_hz) {
           const x1 = u.valToPos(fc.dyn_notch.min_hz, 'x', true);
           const x2 = u.valToPos(fc.dyn_notch.max_hz, 'x', true);
           ctx.fillStyle = 'rgba(255, 196, 106, 0.10)';
@@ -210,10 +247,9 @@ const opts = computed<Options>(() => ({
           const dynMin = lpf.dyn_min_hz;
           const dynMax = lpf.dyn_max_hz;
           if (dynMin != null && dynMax != null && dynMax > dynMin) {
-            // Dynamic LP: shade the cutoff range.
             const x1 = u.valToPos(dynMin, 'x', true);
             const x2 = u.valToPos(dynMax, 'x', true);
-            ctx.fillStyle = color + '1c';   // ~11% alpha
+            ctx.fillStyle = color + '1c';
             ctx.fillRect(x1, top, x2 - x1, height);
             ctx.strokeStyle = color + 'aa';
             ctx.lineWidth = 1;
@@ -234,11 +270,43 @@ const opts = computed<Options>(() => ({
             ctx.setLineDash([]);
           }
         };
-        // Gyro LPFs in ink2 (cooler), D-term LPFs in a slightly darker ink3.
-        drawLpf(fc.gyro_lpf1,  '#b6c7e0');
-        drawLpf(fc.gyro_lpf2,  '#b6c7e0');
-        drawLpf(fc.dterm_lpf1, '#7a90b0');
-        drawLpf(fc.dterm_lpf2, '#7a90b0');
+        if (show.gyro) {
+          drawLpf(fc.gyro_lpf1,  OVERLAY_COLORS.gyro);
+          drawLpf(fc.gyro_lpf2,  OVERLAY_COLORS.gyro);
+        }
+        if (show.dterm) {
+          drawLpf(fc.dterm_lpf1, OVERLAY_COLORS.dterm);
+          drawLpf(fc.dterm_lpf2, OVERLAY_COLORS.dterm);
+        }
+
+        // RPM filter — swept notches follow motor RPM so we can't show
+        // their actual position. Surface the two static markers: the
+        // RPM-feed LP cutoff (dashed) and the notch-suppression floor
+        // (solid + label-side band hint).
+        if (show.rpm && fc.rpm_filter) {
+          const rpm = fc.rpm_filter;
+          const color = OVERLAY_COLORS.rpm;
+          if (rpm.min_hz > 0) {
+            // Solid line at min_hz: notches are suppressed below this.
+            const x = u.valToPos(rpm.min_hz, 'x', true);
+            ctx.strokeStyle = color + 'cc';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x, top); ctx.lineTo(x, top + height);
+            ctx.stroke();
+          }
+          if (rpm.lpf_hz > 0) {
+            // Dashed line at lpf_hz: the RPM-signal smoothing cutoff.
+            const x = u.valToPos(rpm.lpf_hz, 'x', true);
+            ctx.strokeStyle = color + 'aa';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 3]);
+            ctx.beginPath();
+            ctx.moveTo(x, top); ctx.lineTo(x, top + height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
 
         ctx.restore();
       },
@@ -292,8 +360,8 @@ watch(
 );
 
 // Filter overlay live-redraw — the draw hook reads filterConfig + the
-// toggle directly so we only need to ping the chart on changes.
-watch([overlayEnabled, filterConfig], () => plot.redraw());
+// toggle map directly so we only need to ping the chart on changes.
+watch([overlayShow, filterConfig], () => plot.redraw(), { deep: true });
 
 function resetZoom() {
   // Override the default resetZoom (which resets to data extent) so
@@ -374,17 +442,24 @@ const delayBudgetTooltip = computed(() => {
           >{{ delayBudget.totalMs.toFixed(1) }} ms</div>
         </div>
 
-        <button
-          v-if="filterConfig && (filterConfig.dyn_notch || filterConfig.gyro_lpf1 || filterConfig.gyro_lpf2 || filterConfig.dterm_lpf1 || filterConfig.dterm_lpf2)"
-          type="button"
-          class="px-2 py-[3px] font-mono text-[11px] font-semibold border cursor-pointer whitespace-nowrap"
-          :class="overlayEnabled
-            ? 'bg-bp-warn text-bp-bg border-bp-warn'
-            : 'bg-bp-surface-2 text-bp-ink-3 border-bp-line-2 hover:text-bp-ink'"
-          :aria-pressed="overlayEnabled"
-          title="Toggle filter overlay (dyn notch band + LPF cutoffs)"
-          @click="overlayEnabled = !overlayEnabled"
-        >filter</button>
+        <!-- Per-filter overlay chips. Each chip is independently
+             togglable; chip only appears when the corresponding
+             filter is present in the log's header config. -->
+        <div v-if="overlayChips.length > 0" class="flex gap-px">
+          <button
+            v-for="chip in overlayChips"
+            :key="chip.key"
+            type="button"
+            class="px-2 py-[3px] font-mono text-[11px] font-semibold border cursor-pointer whitespace-nowrap"
+            :class="overlayShow[chip.key]
+              ? 'text-bp-bg border-current'
+              : 'bg-bp-surface-2 text-bp-ink-3 border-bp-line-2 hover:text-bp-ink'"
+            :style="overlayShow[chip.key] ? { backgroundColor: chip.color, borderColor: chip.color } : {}"
+            :aria-pressed="overlayShow[chip.key]"
+            :title="`Toggle ${chip.label} overlay`"
+            @click="overlayShow[chip.key] = !overlayShow[chip.key]"
+          >{{ chip.label }}</button>
+        </div>
 
         <!-- axis toggle chips (per-axis show/hide via view.hiddenSeries) -->
         <div class="flex gap-px">

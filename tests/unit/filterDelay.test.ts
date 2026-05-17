@@ -10,6 +10,7 @@ function emptyConfig(): FilterConfig {
     gyro_lpf2: null,
     dterm_lpf1: null,
     dterm_lpf2: null,
+    rpm_filter: null,
   };
 }
 
@@ -92,5 +93,21 @@ describe('computeDelayBudget', () => {
     c.gyro_lpf1 = { filter_type: 'SOMETHING_NEW', static_hz: 100, dyn_min_hz: null, dyn_max_hz: null };
     const b = computeDelayBudget(c);
     expect(b.stages[0].delayMs).toBeCloseTo(1.592, 2);
+  });
+
+  test('rpm filter contributes Q/(π·min_hz) per harmonic', () => {
+    const c = emptyConfig();
+    c.rpm_filter = { harmonics: 3, lpf_hz: 150, min_hz: 100, q: 500 }; // Q_actual = 5.0
+    const b = computeDelayBudget(c);
+    expect(b.stages).toHaveLength(1);
+    // perNotch = 5 / (π · 100) s = ~15.92 ms; × 3 harmonics = ~47.75 ms
+    expect(b.stages[0].delayMs).toBeCloseTo(47.75, 1);
+  });
+
+  test('rpm filter with zero harmonics is dropped', () => {
+    const c = emptyConfig();
+    c.rpm_filter = { harmonics: 0, lpf_hz: 150, min_hz: 100, q: 500 };
+    const b = computeDelayBudget(c);
+    expect(b.stages).toHaveLength(0);
   });
 });
