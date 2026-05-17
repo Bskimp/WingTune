@@ -135,7 +135,16 @@ type WorkerRequestBody =
 
 type WorkerResponse =
   | { id: number; ok: true; payload: unknown }
-  | { id: number; ok: false; error: unknown };
+  | { id: number; ok: false; error: unknown }
+  /** Progress event — emitted multiple times per scan. Not a terminal
+   *  response; pending entry stays open until the eventual ok/error. */
+  | { id: number; type: 'progress'; frames: number };
+
+function isProgress(
+  res: WorkerResponse,
+): res is { id: number; type: 'progress'; frames: number } {
+  return 'type' in res && res.type === 'progress';
+}
 
 // -- ParserClient ----------------------------------------------------------
 
@@ -145,6 +154,9 @@ const pending = new Map<
   number,
   { resolve: (v: unknown) => void; reject: (e: unknown) => void }
 >();
+/** Per-request progress callbacks, indexed by request id. Set when a
+ *  call passes `onProgress`, cleared when the call resolves/rejects. */
+const progressCallbacks = new Map<number, (frames: number) => void>();
 
 function getWorker(): Worker {
   if (worker) return worker;
@@ -153,9 +165,14 @@ function getWorker(): Worker {
   });
   worker.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
     const res = event.data;
+    if (isProgress(res)) {
+      progressCallbacks.get(res.id)?.(res.frames);
+      return;
+    }
     const slot = pending.get(res.id);
     if (!slot) return;
     pending.delete(res.id);
+    progressCallbacks.delete(res.id);
     if (res.ok) slot.resolve(res.payload);
     else slot.reject(res.error);
   });
@@ -165,11 +182,17 @@ function getWorker(): Worker {
     const error = new Error(event.message || 'parser worker error');
     for (const slot of pending.values()) slot.reject(error);
     pending.clear();
+    progressCallbacks.clear();
   });
   return worker;
 }
 
-function call<T>(req: WorkerRequestBody, transfer?: Transferable[]): Promise<T> {
+interface CallOptions {
+  transfer?: Transferable[];
+  onProgress?: (frames: number) => void;
+}
+
+function call<T>(req: WorkerRequestBody, options: CallOptions = {}): Promise<T> {
   const w = getWorker();
   const id = nextId++;
   return new Promise<T>((resolve, reject) => {
@@ -177,9 +200,10 @@ function call<T>(req: WorkerRequestBody, transfer?: Transferable[]): Promise<T> 
       resolve: (v) => resolve(v as T),
       reject,
     });
+    if (options.onProgress) progressCallbacks.set(id, options.onProgress);
     const message = { ...req, id } as WorkerRequest;
-    if (transfer && transfer.length > 0) {
-      w.postMessage(message, transfer);
+    if (options.transfer && options.transfer.length > 0) {
+      w.postMessage(message, options.transfer);
     } else {
       w.postMessage(message);
     }
@@ -207,14 +231,25 @@ export class ParserClient {
 
   /** Single-pass scan: capability report + time axis + event list, no
    *  per-field arrays. The bytes are transferred to the worker (caller
-   *  loses access to `handle.bytes` after this returns). */
-  async scan(handle: SourceHandle): Promise<ScanReport> {
+   *  loses access to `handle.bytes` after this returns).
+   *
+   *  `onProgress` (optional) is called multiple times during scan with
+   *  the running frame count. Caller estimates a percent against an
+   *  expected-total derived from file size. Callback errors are not
+   *  caught here — keep the callback simple (just update a ref). */
+  async scan(
+    handle: SourceHandle,
+    options: { onProgress?: (frames: number) => void } = {},
+  ): Promise<ScanReport> {
     const bytes = handle.bytes;
     // Transfer the underlying ArrayBuffer so the worker doesn't copy. After
     // this call the caller's Uint8Array view is detached.
     const raw = await call<RawScanReport>(
       { type: 'scan', bytes },
-      [bytes.buffer as ArrayBuffer],
+      {
+        transfer: [bytes.buffer as ArrayBuffer],
+        onProgress: options.onProgress,
+      },
     );
     // Convert at the Layer 1 boundary so Layer 2/3 never sees `number[]`
     // for typed-array-shaped data.

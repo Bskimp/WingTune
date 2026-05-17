@@ -43,10 +43,27 @@ pub fn parser_info() -> String {
 /// (`Box<[u8]>` transfers ownership without copying). Returns the full
 /// `ScanReport` on success or a structured `ScanError` envelope on failure;
 /// both are marshalled to plain JS objects via `serde-wasm-bindgen`.
+///
+/// The optional `on_progress` JS function is called with one argument
+/// (`frames_so_far: number`) every PROGRESS_INTERVAL_FRAMES (256) main
+/// frames. The JS side estimates expected total from file size and
+/// derives a percent. Errors from the callback (return value, throw)
+/// are silently swallowed — progress is best-effort and must not
+/// abort the scan.
 #[wasm_bindgen(js_name = scanLog)]
-pub fn scan_log(bytes: &[u8]) -> Result<JsValue, JsValue> {
+pub fn scan_log(
+    bytes: &[u8],
+    on_progress: Option<js_sys::Function>,
+) -> Result<JsValue, JsValue> {
     let ser = js_serializer();
-    match scan::scan(bytes) {
+    let result = if let Some(cb) = on_progress {
+        scan::scan_with_progress(bytes, &mut |frames| {
+            let _ = cb.call1(&JsValue::NULL, &JsValue::from_f64(frames as f64));
+        })
+    } else {
+        scan::scan(bytes)
+    };
+    match result {
         Ok(report) => report.serialize(&ser)
             .map_err(|e| JsValue::from_str(&format!("serialize ScanReport: {e}"))),
         Err(err) => Err(err.serialize(&ser)

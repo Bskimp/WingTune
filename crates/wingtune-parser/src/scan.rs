@@ -65,7 +65,28 @@ pub enum ScanError {
     InvalidHeaders { reason: String },
 }
 
+/// Frame-count interval at which `scan_with_progress` fires its
+/// callback. 256 frames at BF's typical 1-2 kHz logging rate works
+/// out to a callback every ~128-256 ms — fast enough for the UI to
+/// feel responsive, slow enough not to flood the worker channel.
+const PROGRESS_INTERVAL_FRAMES: u64 = 256;
+
+/// No-callback wrapper preserved for Rust unit tests + the existing
+/// internal call sites. WASM callers should prefer `scan_with_progress`.
 pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
+    scan_with_progress(bytes, &mut |_| {})
+}
+
+/// Like `scan` but invokes `progress(frames_so_far)` periodically so a
+/// caller can render a real progress bar. Called every
+/// `PROGRESS_INTERVAL_FRAMES` main frames; the caller is responsible
+/// for any throttling beyond that. Total frame count isn't known
+/// upfront — the caller estimates expected total from file-size /
+/// typical-frame-bytes and clamps to 95% until scan resolves.
+pub fn scan_with_progress(
+    bytes: &[u8],
+    progress: &mut dyn FnMut(u64),
+) -> Result<ScanReport, ScanError> {
     let file = File::new(bytes);
     let first = file.iter().next().ok_or(ScanError::NoLogs)?;
     let headers =
@@ -146,6 +167,10 @@ pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
                             }
                         }
                     }
+                }
+
+                if total_frames.is_multiple_of(PROGRESS_INTERVAL_FRAMES) {
+                    progress(total_frames);
                 }
             }
             ParserEvent::Event(e) => {

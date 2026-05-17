@@ -265,7 +265,7 @@ function dismissError() {
               {{ fileName ?? 'log' }}
             </div>
             <div class="font-sans text-[11px] text-bp-ink-3 mt-0.5">
-              Decoding · estimated progress (real % needs Rust callback wiring)
+              Decoding · live frame count from WASM, percent estimated against file size
             </div>
           </div>
           <div class="font-mono text-[14px] text-bp-accent tabular-nums">

@@ -20,13 +20,12 @@ export const useLogStore = defineStore('log', () => {
   const scanReport = shallowRef<ScanReport | null>(null);
   const scanning = ref(false);
   const scanError = ref<unknown>(null);
-  /** Estimated scan progress, 0..100. NOT true byte-level progress —
-   *  the Rust scan_log is currently one-shot and doesn't expose a
-   *  per-frame callback. This is an animated estimate based on file
-   *  size and an empirical ~5 MB/s throughput baseline. Ramps to 95%
-   *  over expected duration, then snaps to 100% on actual completion.
-   *  Real streaming progress = a future slice (needs Rust callback
-   *  threading + WASM rebuild). */
+  /** Scan progress, 0..100. Real byte-level progress now: the WASM
+   *  `scanLog` fires a callback every 256 main frames with the running
+   *  frame count, and we estimate percent against an expected total
+   *  derived from file size / typical-bytes-per-frame. Clamps at 95%
+   *  until the scan resolves (then snaps to 100%) so we don't over-
+   *  report when the estimate undershoots. */
   const scanProgress = ref(0);
 
   // Float32Array — built by the bridge from the worker's `time_sec`
@@ -127,13 +126,13 @@ export const useLogStore = defineStore('log', () => {
     // both unusual and out of our reach to fix here.)
   }
 
-  /** Empirical scan throughput baseline. Calibrated against btfl_002 +
-   *  LOG00113 on a mid-range laptop; real-world variance is wide
-   *  enough that the bar will sometimes plateau at 95% before the
-   *  real scan finishes (large logs / slower hardware) or hit 95%
-   *  early (small logs / fast hardware). Either way it beats
-   *  indeterminate. */
-  const SCAN_BYTES_PER_MS = 5_120; // ≈ 5 MB/s
+  /** Typical bytes per main frame on a BF wing log. Used to estimate
+   *  expected total frames from file size for the progress percent.
+   *  Real per-log values vary 40-100 bytes depending on field set +
+   *  debug mode; 70 is a sane middle that keeps the bar reasonably
+   *  paced on both small and large logs. Estimate plateaus at 95%
+   *  if it underestimates; snaps to 100% on actual completion. */
+  const TYPICAL_BYTES_PER_FRAME = 70;
 
   async function loadFile(input: File | string): Promise<void> {
     reset();
@@ -143,27 +142,25 @@ export const useLogStore = defineStore('log', () => {
       fileSize.value = input.size;
     }
 
-    // Kick the estimated-progress animation. Ramps 0 → 95% across
-    // expectedMs (file size / empirical throughput); the snap to 100%
-    // happens in the success branch below. requestAnimationFrame
-    // smoothness, cleaned up in the finally regardless of outcome.
-    const expectedMs = Math.max(
-      120,  // floor for tiny files so the animation is visible at all
-      (fileSize.value ?? 1_000_000) / SCAN_BYTES_PER_MS,
+    // Real progress: WASM scan_log fires onProgress(framesSoFar)
+    // every 256 main frames. We estimate expected total from file
+    // size / typical bytes-per-frame, derive percent, clamp at 95%
+    // until scan actually resolves. Estimate undershoot (slow log
+    // with lots of fields) → bar plateaus at 95%. Overshoot
+    // (sparse log) → bar hits 95% early. Either way honest, beats
+    // the prior animated estimate.
+    const expectedFrames = Math.max(
+      1000,  // floor so even tiny logs show some progress motion
+      (fileSize.value ?? 1_000_000) / TYPICAL_BYTES_PER_FRAME,
     );
-    const animStart = performance.now();
-    let animFrame: number | null = null;
-    const tick = () => {
-      const elapsed = performance.now() - animStart;
-      scanProgress.value = Math.min(95, (elapsed / expectedMs) * 95);
-      animFrame = requestAnimationFrame(tick);
+    const onProgress = (frames: number) => {
+      scanProgress.value = Math.min(95, (frames / expectedFrames) * 100);
     };
-    animFrame = requestAnimationFrame(tick);
 
     try {
       const handle: SourceHandle = await client.openSource(input);
       const startedAt = performance.now();
-      const report = await client.scan(handle);
+      const report = await client.scan(handle, { onProgress });
       parseTimeMs.value = performance.now() - startedAt;
       scanReport.value = report;
       time.value = report.time_sec;
@@ -177,7 +174,6 @@ export const useLogStore = defineStore('log', () => {
       scanError.value = err;
       throw err;
     } finally {
-      if (animFrame !== null) cancelAnimationFrame(animFrame);
       scanning.value = false;
     }
   }

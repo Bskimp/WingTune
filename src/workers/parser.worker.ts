@@ -36,7 +36,8 @@ type WorkerRequest = ScanRequest | HydrateRequest | InfoRequest;
 
 type WorkerResponse =
   | { id: number; ok: true; payload: unknown }
-  | { id: number; ok: false; error: unknown };
+  | { id: number; ok: false; error: unknown }
+  | { id: number; type: 'progress'; frames: number };
 
 self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
   const req = event.data;
@@ -59,12 +60,19 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
 
 function dispatch(req: WorkerRequest): unknown {
   switch (req.type) {
-    case 'scan':
+    case 'scan': {
       // Stash the bytes for subsequent hydrate calls. After
       // `postMessage`'s transfer the main thread no longer owns this
       // buffer; the worker is now the source of truth for the log.
       logBytes = req.bytes;
-      return scanLog(req.bytes);
+      // Progress callback: forward to main thread tagged with the
+      // request id so the bridge can dispatch per pending scan.
+      const onProgress = (frames: number) => {
+        const msg: WorkerResponse = { id: req.id, type: 'progress', frames };
+        self.postMessage(msg);
+      };
+      return scanLog(req.bytes, onProgress);
+    }
     case 'hydrate':
       if (!logBytes) {
         throw new Error('hydrate: no log loaded — call scan() first');
