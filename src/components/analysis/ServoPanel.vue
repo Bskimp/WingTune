@@ -28,6 +28,7 @@ import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
 import { useCursorSamples } from '@/composables/useCursorSamples';
 import { nearestTimeIndex } from '@/lib/dtype';
+import { detectSaturation, type SaturationResult } from '@/lib/servoAnalysis';
 
 // Cycle of Blueprint-compatible colors per channel. uPlot needs concrete
 // CSS strings; keep in sync with tailwind.css @theme block. The first
@@ -148,6 +149,40 @@ const motorCount = computed(() => activeChannels.value.filter((c) => c.kind === 
 const channelArrays = computed<Float32Array[]>(() =>
   activeChannels.value.map((c) => fields.value.get(c.fieldName) ?? new Float32Array(0)),
 );
+
+// Per-channel saturation detection. Cheap (single pass over each PWM
+// array); recomputes whenever channels change. Recommender + strip
+// rendering both read from this.
+const saturationByChannel = computed<Map<string, SaturationResult>>(() => {
+  const out = new Map<string, SaturationResult>();
+  activeChannels.value.forEach((c, i) => {
+    const arr = channelArrays.value[i];
+    if (!arr || arr.length === 0) return;
+    // Motors and servos both use 1000-2000 PWM range — same detection
+    // path. (If servo endpoint overrides via `servo_lowpwm_N` /
+    // `servo_highpwm_N` matter on a real log, look them up in
+    // header_params here.)
+    out.set(c.fieldName, detectSaturation(arr));
+  });
+  return out;
+});
+
+// Aggregate "any channel pegged" pct for the header strip.
+const worstSaturationPct = computed(() => {
+  let worst = 0;
+  for (const r of saturationByChannel.value.values()) {
+    const pct = r.saturatedFraction * 100;
+    if (pct > worst) worst = pct;
+  }
+  return worst;
+});
+
+const worstSaturationTone = computed(() => {
+  const p = worstSaturationPct.value;
+  if (p >= 10) return 'text-bp-stamp';
+  if (p >= 2)  return 'text-bp-warn';
+  return 'text-bp-ok';
+});
 
 const ready = computed(() =>
   time.value.length > 0 &&
@@ -304,6 +339,10 @@ function resetZoom() {
           <div class="font-sans text-[9px] tracking-[0.2em] uppercase font-bold text-bp-ink-3">inactive</div>
           <div class="font-mono text-[13px] text-bp-dim">{{ inactiveCount }}</div>
         </div>
+        <div class="text-right" title="Highest per-channel saturation: time the channel was pegged at the PWM endpoint (within 25 µs)">
+          <div class="font-sans text-[9px] tracking-[0.2em] uppercase font-bold text-bp-ink-3">worst sat</div>
+          <div class="font-mono text-[13px]" :class="worstSaturationTone">{{ worstSaturationPct.toFixed(1) }} %</div>
+        </div>
         <button
           type="button"
           class="px-2.5 py-[3px] bg-bp-surface-2 border border-bp-line-2 text-bp-ink-3 font-mono text-[11px] font-semibold cursor-pointer hover:text-bp-ink"
@@ -339,6 +378,53 @@ function resetZoom() {
             boxShadow: '0 0 6px var(--color-bp-accent)',
           }"
         />
+      </div>
+
+      <!-- Saturation strips: one row per active channel, time-axis-aligned
+           with the chart above. Warn-colored bars mark hit-low episodes
+           (servo against minPwm); stamp-colored bars mark hit-high. Strips
+           are intentionally simple flex-row backgrounds — no canvas — so
+           Vue reactivity handles updates cleanly when channels toggle. -->
+      <div
+        v-if="ready"
+        class="mt-2 flex flex-col gap-px font-mono text-[10px] text-bp-ink-3"
+      >
+        <div
+          v-for="c in activeChannels.filter((c) => !hiddenSeries.has(c.fieldName))"
+          :key="c.fieldName + '-sat'"
+          class="flex items-center gap-2 h-3"
+        >
+          <span class="w-20 shrink-0 truncate text-right">{{ c.fieldName }}</span>
+          <div class="flex-1 h-full bg-bp-bg border border-bp-line-2 relative overflow-hidden">
+            <div
+              v-for="(ep, i) in (saturationByChannel.get(c.fieldName)?.episodeList ?? [])"
+              :key="i"
+              class="absolute top-0 bottom-0"
+              :style="{
+                left: `${(ep.startIdx / (channelArrays[0]?.length ?? 1)) * 100}%`,
+                width: `${Math.max(0.2, ((ep.endIdx - ep.startIdx + 1) / (channelArrays[0]?.length ?? 1)) * 100)}%`,
+                background: ep.kind === 'low' ? 'var(--color-bp-warn)' : 'var(--color-bp-stamp)',
+                opacity: 0.85,
+              }"
+              :title="`${ep.kind === 'low' ? 'Low' : 'High'} endpoint · ${ep.durationMs.toFixed(0)} ms`"
+            />
+          </div>
+          <span
+            class="w-12 shrink-0 text-right tabular-nums"
+            :class="(saturationByChannel.get(c.fieldName)?.saturatedFraction ?? 0) >= 0.1
+              ? 'text-bp-stamp'
+              : (saturationByChannel.get(c.fieldName)?.saturatedFraction ?? 0) >= 0.02
+                ? 'text-bp-warn'
+                : 'text-bp-ink-3'"
+            :title="(() => {
+              const r = saturationByChannel.get(c.fieldName);
+              if (!r) return '';
+              return `${r.lowHits} low · ${r.highHits} high · longest ${r.longestRunMs.toFixed(0)} ms`;
+            })()"
+          >
+            {{ ((saturationByChannel.get(c.fieldName)?.saturatedFraction ?? 0) * 100).toFixed(1) }}%
+          </span>
+        </div>
       </div>
     </div>
 
