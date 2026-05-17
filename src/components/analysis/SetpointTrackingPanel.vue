@@ -165,35 +165,35 @@ function resetZoom() {
 <template>
   <section class="bg-bp-surface border border-bp-line-2">
     <header
-      class="flex justify-between items-center px-3 py-2 border-b border-bp-line"
+      class="flex flex-wrap justify-between items-center px-3 py-2 border-b border-bp-line gap-y-1.5 gap-x-3"
     >
       <div class="min-w-0">
-        <div class="font-slab text-[13px] font-semibold text-bp-ink">
+        <div class="font-slab text-[13px] font-semibold text-bp-ink whitespace-nowrap">
           Setpoint tracking · {{ axisSpec.label.toLowerCase() }} axis
         </div>
         <div class="font-mono text-[10.5px] text-bp-ink-3 mt-px">
-          gyro vs setpoint · full log · drag inside the chart to zoom · double-click to reset
+          gyro vs setpoint · drag to zoom
         </div>
       </div>
 
-      <div class="flex gap-3.5 items-center">
-        <div v-if="stats" class="flex gap-3.5 items-baseline">
+      <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
+        <div v-if="stats" class="flex gap-3 items-baseline">
           <div class="text-right">
-            <div class="font-sans text-[9px] tracking-[0.2em] uppercase font-bold text-bp-ink-3">RMS err</div>
+            <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">RMS err</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ stats.rmsError.toFixed(2) }}</div>
           </div>
           <div class="text-right">
-            <div class="font-sans text-[9px] tracking-[0.2em] uppercase font-bold text-bp-ink-3">peak err</div>
+            <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">peak err</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ stats.peakError.toFixed(2) }}</div>
           </div>
           <div class="text-right">
-            <div class="font-sans text-[9px] tracking-[0.2em] uppercase font-bold text-bp-ink-3">samples</div>
+            <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">samples</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ stats.sampleCount.toLocaleString() }}</div>
           </div>
         </div>
 
         <!-- axis selector chips -->
-        <div class="flex gap-px ml-2">
+        <div class="flex gap-px">
           <button
             v-for="ax in AXES"
             :key="ax.id"
@@ -211,10 +211,10 @@ function resetZoom() {
 
         <button
           type="button"
-          class="px-2.5 py-[3px] bg-bp-surface-2 border border-bp-line-2 text-bp-ink-3 font-mono text-[11px] font-semibold cursor-pointer hover:text-bp-ink"
+          class="px-2 py-[3px] bg-bp-surface-2 border border-bp-line-2 text-bp-ink-3 font-mono text-[11px] font-semibold cursor-pointer hover:text-bp-ink whitespace-nowrap"
           title="Reset zoom"
           @click="resetZoom"
-        >⤺ reset</button>
+        >⤺</button>
       </div>
     </header>
 

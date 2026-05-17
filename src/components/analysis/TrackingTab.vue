@@ -1,21 +1,22 @@
 <script setup lang="ts">
-// Tracking tab — gyro vs setpoint headline panel plus the M2 PIDFS
-// contribution panel side by side on wide viewports, stacking on
-// narrower ones. Matches the design's two-column TrackingTab layout
-// (analysis-screen.jsx) with the M2 PIDFS panel slotting into the
-// right column where the design had it.
+// Tracking tab — gyro vs setpoint headline panel + the M2 PIDFS
+// contribution panel stacked vertically, both full-width. The design
+// originally had a 2-column layout, but stacking aligns the panels
+// with the full-width TimeBar + CursorReadout above, so the pinned
+// cursor reads as one continuous vertical line through everything at
+// time t. Better mental model than a side-by-side where the cursor is
+// only on one side, and side-steps the horizontal-overflow issue from
+// trying to squeeze 5 chip groups into a narrow column.
 //
-// Future panels (FilterDelayPanel from M4, SaturationPanel from
-// M-Servo, etc.) extend the right column as those modules land.
+// Future time-domain panels (FilterDelayPanel from M4, SaturationPanel
+// from M-Servo, etc.) stack into this column as those modules land.
 
 import SetpointTrackingPanel from '@/components/analysis/SetpointTrackingPanel.vue';
 import PIDContributionPanel from '@/components/analysis/PIDContributionPanel.vue';
 </script>
 
 <template>
-  <div
-    class="grid gap-2.5 grid-cols-1 xl:grid-cols-[1.55fr_1fr]"
-  >
+  <div class="flex flex-col gap-2.5">
     <SetpointTrackingPanel />
     <PIDContributionPanel />
   </div>

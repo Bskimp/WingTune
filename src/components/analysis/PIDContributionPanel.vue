@@ -252,17 +252,17 @@ const dominantColor = computed(() => {
 
 <template>
   <section class="bg-bp-surface border border-bp-line-2">
-    <header class="flex justify-between items-center px-3 py-2 border-b border-bp-line gap-3">
+    <header class="flex flex-wrap justify-between items-center px-3 py-2 border-b border-bp-line gap-y-1.5 gap-x-3">
       <div class="min-w-0">
-        <div class="font-slab text-[13px] font-semibold text-bp-ink">
+        <div class="font-slab text-[13px] font-semibold text-bp-ink whitespace-nowrap">
           PID contribution · {{ axisSpec.label.toLowerCase() }} axis
         </div>
         <div class="font-mono text-[10.5px] text-bp-ink-3 mt-px">
-          click a term to toggle · shift-click to solo
+          click to toggle · shift-click to solo
         </div>
       </div>
 
-      <div class="flex gap-2 items-center">
+      <div class="flex flex-wrap gap-y-1.5 gap-x-2 items-center">
         <div class="flex gap-1 items-center">
           <button
             v-for="t in presentTerms"
@@ -286,7 +286,7 @@ const dominantColor = computed(() => {
           </button>
         </div>
 
-        <div class="flex gap-px ml-1">
+        <div class="flex gap-px">
           <button
             v-for="ax in AXES"
             :key="ax.id"
@@ -304,7 +304,7 @@ const dominantColor = computed(() => {
 
         <button
           type="button"
-          class="px-2 py-[3px] bg-bp-surface-2 border border-bp-line-2 text-bp-ink-3 font-mono text-[11px] font-semibold cursor-pointer hover:text-bp-ink ml-1"
+          class="px-2 py-[3px] bg-bp-surface-2 border border-bp-line-2 text-bp-ink-3 font-mono text-[11px] font-semibold cursor-pointer hover:text-bp-ink"
           title="Reset zoom"
           @click="resetZoom"
         >⤺</button>
