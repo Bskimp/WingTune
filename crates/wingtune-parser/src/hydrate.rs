@@ -127,7 +127,7 @@ pub fn hydrate(
     })
 }
 
-fn main_value_to_f32(v: MainValue) -> f32 {
+pub(crate) fn main_value_to_f32(v: MainValue) -> f32 {
     match v {
         MainValue::Unsigned(u) => u as f32,
         MainValue::Signed(s) => s as f32,
@@ -138,7 +138,7 @@ fn main_value_to_f32(v: MainValue) -> f32 {
     }
 }
 
-fn gps_value_to_f32(v: GpsValue) -> f32 {
+pub(crate) fn gps_value_to_f32(v: GpsValue) -> f32 {
     match v {
         GpsValue::Coordinate(c) => c as f32,
         GpsValue::Altitude(a) => a.get::<meter>() as f32,

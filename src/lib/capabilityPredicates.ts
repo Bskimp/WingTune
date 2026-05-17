@@ -194,23 +194,41 @@ export function checkTpaCurveFit(capability: CapabilityReport): Capability {
   return { state: 'available', via };
 }
 
-/** Airspeed auto-tune reads the firmware's own airspeed estimate
- *  logged via DEBUG_TPA (PR #13895). Requires `debug_mode = TPA`
- *  AND `gps_use_3d_speed = ON` in the BF config; we can verify the
- *  debug mode but the gps_use_3d_speed CLI flag isn't in the scan
- *  report, so we surface a GPS-present check as a proxy. */
+/** Airspeed auto-tune. WingTune supports two paths:
+ *
+ *   1. **BASIC fit (M3 slice 4 recommender)** — fits BF's BASIC airspeed
+ *      model against logged GPS 3D speed. Needs GPS present + actually
+ *      locked (gps:GPS_speed not all-zero). DEBUG_TPA is NOT required.
+ *   2. **Firmware cross-check** — additionally requires
+ *      `debug_mode = TPA` so we can read BF's own `tpa_speed_est` and
+ *      validate our fit against it. Strictly bonus confidence.
+ *
+ *  State mapping:
+ *    - `available` = path (1) runs AND path (2) cross-check available
+ *    - `partial`   = path (1) runs but cross-check missing (no DEBUG_TPA)
+ *    - `inactive`  = GPS frames emitted but never locked (all-zero speed
+ *                    OR all-zero DEBUG_TPA channel)
+ *    - `blocked`   = no GPS module at all */
 export function checkAirspeedAutoTune(capability: CapabilityReport): Capability {
-  const speed = resolveSignal('tpa_speed_est', null, capability);
-  if (speed.state === 'missing') {
-    return {
-      state: 'blocked',
-      reason: 'set `debug_mode = TPA` in BF to log the airspeed estimate',
-    };
-  }
   if (!capability.gps_present) {
     return {
       state: 'blocked',
-      reason: 'GPS not present — also requires `set gps_use_3d_speed = ON` in BF for the estimate to be meaningful',
+      reason: 'no GPS frames in this log — wing needs a GPS module wired + `set gps_use_3d_speed = ON` in BF',
+    };
+  }
+  const speedCheck = capability.sample_check['gps:GPS_speed'];
+  if (speedCheck && speedCheck.all_zero) {
+    return {
+      state: 'inactive',
+      reason: 'GPS frames present but never got a satellite lock — gps:GPS_speed all zero across the flight',
+    };
+  }
+
+  const speed = resolveSignal('tpa_speed_est', null, capability);
+  if (speed.state === 'missing') {
+    return {
+      state: 'partial',
+      reason: 'BASIC airspeed fit runnable. Set `debug_mode = TPA` in BF for firmware-estimator cross-check (higher confidence).',
     };
   }
   if (speed.state === 'inactive') {

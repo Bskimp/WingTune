@@ -12,11 +12,20 @@ use std::collections::BTreeMap;
 use blackbox_log::File;
 use blackbox_log::data::ParserEvent;
 use blackbox_log::event::Event;
-use blackbox_log::frame::FrameDef;
+use blackbox_log::frame::{Frame, FrameDef};
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{CapabilityReport, FrameIndex};
+use crate::capability::{CapabilityReport, FrameIndex, SampleCheck};
 use crate::event::EventFrame;
+use crate::hydrate::{gps_value_to_f32, main_value_to_f32};
+
+/// Sample every Nth main frame for `sample_check` activity probes. Main
+/// frames fire at ~1 kHz on wings; checking every 32nd keeps the probe
+/// at ~30 Hz (still fine-grained enough to catch any non-zero activity
+/// in normal flight) while cutting the work to ~3 % of the naive cost.
+/// GPS frames are NOT strided — they're already ~10 Hz so checking each
+/// one is cheap.
+const SAMPLE_STRIDE: u64 = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanReport {
@@ -71,6 +80,15 @@ pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
         }
     }
 
+    // Per-field "have we ever seen a non-zero sample" trackers.
+    // Sized to the unfiltered frame def length so indices line up with
+    // `frame.get(i)`. Once a field flips to true, subsequent frames
+    // skip the check for that field (short-circuit hot path).
+    let main_field_count = headers.main_frame_def().len();
+    let gps_field_count = headers.gps_frame_def().map_or(0, |d| d.len());
+    let mut main_nonzero: Vec<bool> = vec![false; main_field_count];
+    let mut gps_nonzero: Vec<bool> = vec![false; gps_field_count];
+
     let mut parser = headers.data_parser();
     let mut total_frames: u64 = 0;
     let mut time_sec: Vec<f32> = Vec::new();
@@ -89,13 +107,32 @@ pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
                 // accurately for long flights; the delta is fine).
                 let dt_sec = ((t_micros.saturating_sub(t0)) as f64 / 1_000_000.0) as f32;
                 time_sec.push(dt_sec);
+
+                if total_frames.is_multiple_of(SAMPLE_STRIDE) {
+                    for i in 0..main_field_count {
+                        if main_nonzero[i] { continue; }
+                        if let Some(value) = frame.get(i) {
+                            if main_value_to_f32(value) != 0.0 {
+                                main_nonzero[i] = true;
+                            }
+                        }
+                    }
+                }
             }
             ParserEvent::Event(e) => {
                 let last_time_sec = time_sec.last().copied().unwrap_or(0.0);
                 events.push(map_event(e, last_time_sec));
             }
-            ParserEvent::Gps(_) => {
+            ParserEvent::Gps(frame) => {
                 gps_present = true;
+                for i in 0..gps_field_count {
+                    if gps_nonzero[i] { continue; }
+                    if let Some(value) = frame.get(i) {
+                        if gps_value_to_f32(value) != 0.0 {
+                            gps_nonzero[i] = true;
+                        }
+                    }
+                }
             }
             ParserEvent::Slow(_) => {
                 // Slow frames carry mode flags, vbat, etc. M1.3+ will
@@ -105,12 +142,27 @@ pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
         }
     }
 
+    let mut sample_check: BTreeMap<String, SampleCheck> = BTreeMap::new();
+    for (i, field) in headers.main_frame_def().iter().enumerate() {
+        sample_check.insert(
+            field.name.to_string(),
+            SampleCheck { all_zero: !main_nonzero[i], has_content: main_nonzero[i] },
+        );
+    }
+    if let Some(gps_def) = headers.gps_frame_def() {
+        for (i, field) in gps_def.iter().enumerate() {
+            sample_check.insert(
+                format!("gps:{}", field.name),
+                SampleCheck { all_zero: !gps_nonzero[i], has_content: gps_nonzero[i] },
+            );
+        }
+    }
+
     let capability = CapabilityReport {
         fields_present,
         debug_mode,
         gps_present,
-        // Stubbed for M1.2 — filled in by follow-ups.
-        sample_check: BTreeMap::new(),
+        sample_check,
         frame_index: FrameIndex::default(),
         total_frames,
         voltage_sag_summary: None,
