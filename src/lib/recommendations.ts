@@ -81,6 +81,11 @@ export interface RecommenderArgs {
    *  aren't hydrated yet → the recommender skips them, returns no
    *  recs from that axis. */
   fields: ReadonlyMap<string, Float32Array>;
+  /** Log time axis (logStore.time), Float32 seconds-since-log-start.
+   *  Used by recommenders to translate sample indices into evidence
+   *  point time_sec values for the cursor-pin chips. Empty array
+   *  before scan completes. */
+  time: Float32Array;
 }
 
 export type Recommender = (args: RecommenderArgs) => Recommendation[];

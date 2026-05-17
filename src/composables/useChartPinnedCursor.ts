@@ -49,7 +49,7 @@ export function useChartPinnedCursor({ plot, host }: UseChartPinnedCursorArgs) {
   }
 
   watch(
-    [cursorTime, cursorPinned, plot.ready],
+    [cursorTime, cursorPinned, plot.ready, plot.updateCount],
     recompute,
     { immediate: true },
   );

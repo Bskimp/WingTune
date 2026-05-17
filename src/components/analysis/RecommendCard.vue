@@ -9,10 +9,29 @@
 
 import { computed, ref } from 'vue';
 
-import type { Recommendation, Severity } from '@/lib/recommendations';
+import type { Recommendation, Severity, EvidencePoint } from '@/lib/recommendations';
 import type { ConfidenceLevel } from '@/lib/confidence';
+import { useViewStore } from '@/stores/view';
 
 const props = defineProps<{ rec: Recommendation }>();
+
+const view = useViewStore();
+
+function formatClock(seconds: number): string {
+  const total = Math.floor(seconds);
+  const m = Math.floor(total / 60);
+  const s = total - m * 60;
+  const ms = Math.round((seconds - total) * 1000);
+  return `${m}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0').slice(0, 2)}`;
+}
+
+/** Pin the shared cursor at the evidence point's time and switch
+ *  to the Tracking tab so the user sees it land. Pin persists
+ *  across tab switches per the M1.4 cursor design. */
+function pinEvidence(ev: EvidencePoint) {
+  view.pinCursorAt(ev.time_sec);
+  view.setTab('tracking');
+}
 
 const open = ref(false);
 const copied = ref(false);
@@ -128,6 +147,30 @@ const allowCopy = computed(() =>
             <span class="text-bp-ink-3">{{ row[0] }}</span>
             <span class="text-bp-accent">{{ row[1] }}</span>
           </div>
+        </div>
+      </div>
+
+      <!-- evidence chips — click to pin cursor on Tracking -->
+      <div
+        v-if="rec.evidence && rec.evidence.length > 0"
+        class="mb-3"
+      >
+        <div class="font-sans text-[9px] tracking-[0.22em] uppercase font-bold text-bp-ink-3 mb-1.5">
+          Evidence · click to pin cursor
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <button
+            v-for="(ev, i) in rec.evidence"
+            :key="`${ev.time_sec}-${i}`"
+            type="button"
+            class="inline-flex items-center gap-1.5 px-2 py-0.5 bg-bp-surface-2 border border-bp-line-2 text-bp-ink-2 font-mono text-[11px] cursor-pointer hover:border-bp-accent hover:text-bp-ink"
+            :title="`Pin cursor at ${ev.time_sec.toFixed(3)}s and switch to Tracking tab`"
+            @click="pinEvidence(ev)"
+          >
+            <span class="text-bp-accent text-[10px]">↳</span>
+            {{ formatClock(ev.time_sec) }}
+            <span class="text-bp-ink-3">· {{ ev.label }}</span>
+          </button>
         </div>
       </div>
 

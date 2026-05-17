@@ -22,7 +22,7 @@ const view = useViewStore();
 const { activeTab } = storeToRefs(view);
 
 const logStore = useLogStore();
-const { scanReport, fields } = storeToRefs(logStore);
+const { scanReport, fields, time } = storeToRefs(logStore);
 
 type TabSpec = { id: AnalysisTab; label: string };
 
@@ -42,6 +42,7 @@ const recCount = computed(() => {
     capability: r.capability,
     modules,
     fields: fields.value,
+    time: time.value,
   }).length;
 });
 

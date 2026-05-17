@@ -4,6 +4,14 @@
 // log is short). Phase shading from the design is deliberately omitted
 // here — phase detection is an M2+ analytics module; rather than mock
 // phases, we show the bare time axis until that lands.
+//
+// Visual alignment with the chart panels below: each panel reserves
+// PLOT_AXIS_LEFT_PX pixels on the left for y-axis labels (uPlot
+// `axes[1].size` — keep all panels in sync at this same value). The
+// time bar pads its CONTENT area by the same amount so a cursor at
+// time t lines up vertically with where that t lands on the chart's
+// plotting area. Right side gets a small matching pad for uPlot's
+// default right margin.
 
 import { computed, ref } from 'vue';
 import { storeToRefs } from 'pinia';
@@ -11,12 +19,19 @@ import { storeToRefs } from 'pinia';
 import { useLogStore } from '@/stores/log';
 import { useViewStore } from '@/stores/view';
 
+/** Must match `axes[1].size` on every uPlot chart panel
+ *  (SetpointTrackingPanel, PIDContributionPanel, ServoPanel). If a
+ *  panel uses a different y-axis size, its cursor won't visually
+ *  align with the time bar's cursor at the same time value. */
+const PLOT_AXIS_LEFT_PX = 50;
+const PLOT_PADDING_RIGHT_PX = 10;
+
 const logStore = useLogStore();
 const view = useViewStore();
 const { time } = storeToRefs(logStore);
 const { cursorTime, cursorPinned } = storeToRefs(view);
 
-const barRef = ref<HTMLDivElement | null>(null);
+const contentRef = ref<HTMLDivElement | null>(null);
 
 const totalSeconds = computed(() => {
   const t = time.value;
@@ -58,9 +73,10 @@ function fracToSeconds(frac: number): number {
 }
 
 function xFracFromEvent(ev: MouseEvent): number {
-  const el = barRef.value;
+  const el = contentRef.value;
   if (!el) return 0;
   const r = el.getBoundingClientRect();
+  if (r.width <= 0) return 0;
   return Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
 }
 
@@ -88,48 +104,59 @@ const cursorLeftPct = computed(() => {
 
 <template>
   <div
-    ref="barRef"
     class="relative h-7 bg-bp-surface border border-bp-line-2 border-t-0 select-none"
     :class="totalSeconds > 0 ? 'cursor-crosshair' : 'cursor-default'"
     @mousedown="onDown"
   >
-    <!-- minute / interval tick marks. First tick left-aligns to avoid
-         half-clipping its label past the bar's left edge; last tick
-         right-aligns symmetrically; middle ticks center on their stop. -->
+    <!-- Inner content area that visually aligns with the chart panels'
+         plotting area. All percent-based positioning (ticks + cursor)
+         is relative to this inner div, NOT the outer bar. -->
     <div
-      v-for="(stop, i) in tickStops"
-      :key="stop.seconds"
-      class="absolute top-[18px] font-mono text-[9.5px] text-bp-ink-3 pointer-events-none"
+      ref="contentRef"
+      class="absolute top-0 bottom-0"
       :style="{
-        left: totalSeconds > 0 ? `${(stop.seconds / totalSeconds) * 100}%` : '0',
-        transform: i === 0
-          ? 'translateX(0)'
-          : i === tickStops.length - 1
-            ? 'translateX(-100%)'
-            : 'translateX(-50%)',
+        left:  `${PLOT_AXIS_LEFT_PX}px`,
+        right: `${PLOT_PADDING_RIGHT_PX}px`,
       }"
     >
-      {{ stop.label }}
-    </div>
-
-    <!-- cursor line -->
-    <template v-if="cursorLeftPct !== null">
+      <!-- minute / interval tick marks. First tick left-aligns to avoid
+           half-clipping its label past the content's left edge; last
+           tick right-aligns symmetrically; middle ticks center. -->
       <div
-        class="absolute top-0 bottom-0 w-px pointer-events-none"
-        :class="cursorPinned ? 'bg-bp-accent' : 'bg-bp-ink'"
+        v-for="(stop, i) in tickStops"
+        :key="stop.seconds"
+        class="absolute top-[18px] font-mono text-[9.5px] text-bp-ink-3 pointer-events-none"
         :style="{
-          left: `${cursorLeftPct}%`,
-          boxShadow: cursorPinned ? '0 0 6px var(--color-bp-accent)' : 'none',
+          left: totalSeconds > 0 ? `${(stop.seconds / totalSeconds) * 100}%` : '0',
+          transform: i === 0
+            ? 'translateX(0)'
+            : i === tickStops.length - 1
+              ? 'translateX(-100%)'
+              : 'translateX(-50%)',
         }"
-      />
-      <div
-        class="absolute -top-px px-[5px] py-px font-mono text-[9px] font-semibold pointer-events-none whitespace-nowrap"
-        :class="cursorPinned ? 'bg-bp-accent text-bp-bg' : 'bg-bp-ink text-bp-bg'"
-        :style="{ left: `${cursorLeftPct}%`, transform: 'translateX(-50%)' }"
       >
-        {{ formatCursorReadout(cursorTime) }}
+        {{ stop.label }}
       </div>
-    </template>
+
+      <!-- cursor line -->
+      <template v-if="cursorLeftPct !== null">
+        <div
+          class="absolute top-0 bottom-0 w-px pointer-events-none"
+          :class="cursorPinned ? 'bg-bp-accent' : 'bg-bp-ink'"
+          :style="{
+            left: `${cursorLeftPct}%`,
+            boxShadow: cursorPinned ? '0 0 6px var(--color-bp-accent)' : 'none',
+          }"
+        />
+        <div
+          class="absolute -top-px px-[5px] py-px font-mono text-[9px] font-semibold pointer-events-none whitespace-nowrap"
+          :class="cursorPinned ? 'bg-bp-accent text-bp-bg' : 'bg-bp-ink text-bp-bg'"
+          :style="{ left: `${cursorLeftPct}%`, transform: 'translateX(-50%)' }"
+        >
+          {{ formatCursorReadout(cursorTime) }}
+        </div>
+      </template>
+    </div>
 
     <span
       v-if="totalSeconds <= 0"

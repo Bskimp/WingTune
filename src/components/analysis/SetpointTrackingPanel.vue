@@ -121,7 +121,9 @@ const opts = computed<Options>(() => ({
       grid:   { stroke: COLORS.line, width: 0.5 },
       ticks:  { stroke: COLORS.line, width: 0.5 },
       font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      size:   46,
+      // Must match TimeBar's PLOT_AXIS_LEFT_PX so the time-bar cursor
+      // visually aligns with this chart's cursor at the same time t.
+      size:   50,
     },
   ],
   hooks: {

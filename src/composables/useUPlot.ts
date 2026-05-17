@@ -35,6 +35,14 @@ export interface UseUPlotHandle {
    *  (overlays, derived pixel positions) should watch this so their
    *  watchers re-fire at mount/rebuild time. */
   ready: Readonly<Ref<boolean>>;
+  /** Monotonic counter that ticks each time setData is called (i.e.
+   *  whenever the underlying data ref changes and uPlot has rescaled).
+   *  Overlay consumers should include this in their watcher deps so
+   *  pixel-position recomputes fire AFTER uPlot has updated its
+   *  scales — important on fresh tab-switch mounts where the chart
+   *  is built with empty stub data, then setData lands real arrays
+   *  and rescales x. */
+  updateCount: Readonly<Ref<number>>;
   /** Pixel x position of a given time value, or `null` if no plot.
    *  CSS pixels relative to the host element. */
   timeToPos(t: number): number | null;
@@ -56,6 +64,7 @@ export function useUPlot({ target, data, opts }: UseUPlotArgs): UseUPlotHandle {
   let plot: uPlot | null = null;
   let ro: ResizeObserver | null = null;
   const ready = ref(false);
+  const updateCount = ref(0);
 
   function destroy() {
     ro?.disconnect();
@@ -77,17 +86,23 @@ export function useUPlot({ target, data, opts }: UseUPlotArgs): UseUPlotHandle {
         if (!plot) return;
         const rect = el.getBoundingClientRect();
         plot.setSize({ width: rect.width, height: optsNow.height });
+        updateCount.value += 1; // resize → axis layout may shift → pinned overlays recompute
       });
       ro.observe(el);
     }
     ready.value = true;
+    updateCount.value += 1;
   }
 
   onMounted(build);
 
-  // Data refresh path — cheap, no recreate.
+  // Data refresh path — cheap, no recreate. Bump updateCount so
+  // downstream overlay consumers re-read the now-rescaled plot
+  // (important on fresh tab-switch mounts where uPlot is built with
+  // empty stub data then setData lands real arrays).
   watch(data, (next) => {
     plot?.setData(next);
+    updateCount.value += 1;
   });
 
   // Opts changes (axis labels, series colors, etc.) require a full rebuild
@@ -102,13 +117,25 @@ export function useUPlot({ target, data, opts }: UseUPlotArgs): UseUPlotHandle {
 
   return {
     ready,
+    updateCount,
     timeToPos(t) {
       if (!plot) return null;
-      return plot.valToPos(t, 'x');
+      // uPlot's valToPos returns CSS pixels relative to the PLOTTING
+      // AREA's left edge (not the canvas/host's left edge — see uPlot
+      // source ~line 5207, where offset is hardcoded 0 in CSS mode).
+      // Add `plot.over.offsetLeft` to translate into host-relative
+      // pixels so overlay divs positioned inside the host land on the
+      // same column as the trace.
+      const local = plot.valToPos(t, 'x');
+      const offset = plot.over?.offsetLeft ?? 0;
+      return local + offset;
     },
     posToTime(x) {
       if (!plot) return null;
-      return plot.posToVal(x, 'x');
+      // Inverse of timeToPos — subtract the offset to translate back
+      // into plotting-area-local pixels before handing to uPlot.
+      const offset = plot.over?.offsetLeft ?? 0;
+      return plot.posToVal(x - offset, 'x');
     },
     setCursorAtTime(t) {
       if (!plot) return;
