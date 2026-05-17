@@ -28,6 +28,7 @@ const recs = computed(() => {
     fields: fields.value,
     time: time.value,
     gpsTimeSec: gpsTimeSec.value,
+    filterConfig: r.filter_config,
   });
 });
 

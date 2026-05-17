@@ -13,7 +13,7 @@
 // ConfidenceResult<T> because the UI consumes them per-row and the
 // nesting added zero ergonomic value.
 
-import type { CapabilityReport } from '@/lib/wasmBridge';
+import type { CapabilityReport, FilterConfig } from '@/lib/wasmBridge';
 import type { ConfidenceLevel } from '@/lib/confidence';
 import type { ModuleReport } from '@/lib/capabilityPredicates';
 import {
@@ -28,6 +28,10 @@ import {
   airspeedBasicRecommender,
   airspeedBasicRequiredFields,
 } from '@/lib/recommenders/airspeedBasic';
+import {
+  spectrumFilterRecommender,
+  spectrumFilterRequiredFields,
+} from '@/lib/recommenders/spectrumFilter';
 
 /** UI severity — the "should I care" axis, distinct from confidence
  *  (the "is this rec trustworthy" axis). A high-severity low-
@@ -95,6 +99,11 @@ export interface RecommenderArgs {
    *  the airspeed-basic recommender to trim its fit window to where
    *  GPS data exists. */
   gpsTimeSec: Float32Array;
+  /** Filter chain config (gyro/dterm LPFs + dyn notch + rpm filter)
+   *  parsed from BBL headers. `null` if scan hasn't run yet. Used by
+   *  the spectrum-filter recommender for notch-coverage checks and
+   *  filter-delay-budget recs. */
+  filterConfig: FilterConfig | null;
 }
 
 export type Recommender = (args: RecommenderArgs) => Recommendation[];
@@ -106,6 +115,7 @@ export const ALL_RECOMMENDER_REQUIRED_FIELDS: readonly string[] = [
   ...debugModeRequiredFields,
   ...pidfsSharesRequiredFields,
   ...airspeedBasicRequiredFields,
+  ...spectrumFilterRequiredFields,
 ];
 
 export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
@@ -113,8 +123,8 @@ export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
   for (const rec of debugModeRecommender(args)) recs.push(rec);
   for (const rec of pidfsSharesRecommender(args)) recs.push(rec);
   for (const rec of airspeedBasicRecommender(args)) recs.push(rec);
-  // future: dynamicNotchCoverage, filterDelayBudget,
-  // stepResponseOvershoot, servoSaturation, … each just appended here.
+  for (const rec of spectrumFilterRecommender(args)) recs.push(rec);
+  // future: stepResponseOvershoot, servoSaturation, … each just appended here.
   return recs;
 }
 

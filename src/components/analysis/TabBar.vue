@@ -24,6 +24,8 @@ const { activeTab } = storeToRefs(view);
 const logStore = useLogStore();
 const { scanReport, fields, time, gpsTimeSec } = storeToRefs(logStore);
 
+const filterConfig = computed(() => scanReport.value?.filter_config ?? null);
+
 type TabSpec = { id: AnalysisTab; label: string };
 
 const BASE_TABS: TabSpec[] = [
@@ -45,6 +47,7 @@ const recCount = computed(() => {
     fields: fields.value,
     time: time.value,
     gpsTimeSec: gpsTimeSec.value,
+    filterConfig: filterConfig.value,
   }).length;
 });
 
