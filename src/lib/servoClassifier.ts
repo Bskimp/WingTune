@@ -44,8 +44,8 @@
 
 export type ServoRole =
   | 'unknown'
-  | 'elevon-l' | 'elevon-r'
-  | 'aileron-l' | 'aileron-r'
+  | 'elevon-l' | 'elevon-r' | 'elevon-paired'
+  | 'aileron-l' | 'aileron-r' | 'aileron-paired'
   | 'elevator'
   | 'rudder'
   | 'flap-l' | 'flap-r'
@@ -54,19 +54,21 @@ export type ServoRole =
   | 'other';
 
 export const ROLE_LABELS: Record<ServoRole, string> = {
-  'unknown':   'unknown',
-  'elevon-l':  'Elevon-L',
-  'elevon-r':  'Elevon-R',
-  'aileron-l': 'Aileron-L',
-  'aileron-r': 'Aileron-R',
-  'elevator':  'Elevator',
-  'rudder':    'Rudder',
-  'flap-l':    'Flap-L',
-  'flap-r':    'Flap-R',
-  'vtail-l':   'V-Tail-L',
-  'vtail-r':   'V-Tail-R',
-  'throttle':  'Throttle',
-  'other':     'Other',
+  'unknown':         'unknown',
+  'elevon-l':        'Elevon-L',
+  'elevon-r':        'Elevon-R',
+  'elevon-paired':   'Elevon',
+  'aileron-l':       'Aileron-L',
+  'aileron-r':       'Aileron-R',
+  'aileron-paired':  'Aileron',
+  'elevator':        'Elevator',
+  'rudder':          'Rudder',
+  'flap-l':          'Flap-L',
+  'flap-r':          'Flap-R',
+  'vtail-l':         'V-Tail-L',
+  'vtail-r':         'V-Tail-R',
+  'throttle':        'Throttle',
+  'other':           'Other',
 };
 
 export type ClassificationConfidence = 'confident' | 'inferred' | 'unclassified';
@@ -171,15 +173,29 @@ export function correlateServosToAxes(
 
 // ---- classifier --------------------------------------------------
 
+/** Pair-correlation threshold above which two roll-dominant channels
+ *  are treated as a "paired identical signal" pair (typical wing
+ *  setup: BF mixer sends the same PWM to both servos, physical
+ *  reverse on one of them produces the actual L/R deflection — but
+ *  the log can't see that, both PWM traces are identical). Below the
+ *  negative threshold, the two are anti-correlated → true
+ *  differential mixing → sign-split L/R is meaningful.
+ *
+ *  This was a wing-vs-quad gap in the original classifier: quad
+ *  ailerons live on opposite sides of the differential, wing
+ *  ailerons typically don't. */
+const PAIR_THRESHOLD = 0.5;
+
 /** Infer a per-channel role from a set of correlation results. For
- *  each axis where multiple servos dominate, sign splits them into
- *  Left/Right (positive signed correlation → "Right" by BF's
- *  convention, negative → "Left", though this is convention-dependent
- *  and may need flipping per-mixer when real bench tests come back).
- *  Single-servo-per-axis cases get the unilateral role (Elevator,
- *  Rudder). Unrecognised dominant signs default to the generic
- *  axis role. */
-function rolesFromCorrelation(corrs: readonly AxisCorrelations[]): Map<string, ClassifiedChannel> {
+ *  each axis where multiple servos dominate, we check pair
+ *  correlation BETWEEN the two servos to decide whether they're
+ *  truly differential (anti-correlated, classic L/R split) or
+ *  paired-identical (positively correlated, no L/R from PWM alone).
+ *  Single-servo-per-axis cases get the unilateral role. */
+function rolesFromCorrelation(
+  corrs: readonly AxisCorrelations[],
+  servos: ReadonlyMap<string, Float32Array>,
+): Map<string, ClassifiedChannel> {
   const result = new Map<string, ClassifiedChannel>();
 
   // Group channels by dominant axis.
@@ -196,25 +212,41 @@ function rolesFromCorrelation(corrs: readonly AxisCorrelations[]): Map<string, C
     byAxis[c.dominantAxis].push(c);
   }
 
-  // Roll axis: if exactly 2 channels, sign-split into Elevon-L / -R.
-  // (Could also be Aileron-L / -R; without knowing whether the craft
-  // has a separate elevator we default to elevon labelling. Future:
-  // detect "pitch axis has no dominant servo" → conventional craft →
-  // use aileron labels instead.)
+  // Roll axis: 2-channel case branches on pair correlation.
   const rollChans = byAxis[0];
   if (rollChans.length === 2) {
-    const sorted = [...rollChans].sort((a, b) => a.dominantSigned - b.dominantSigned);
     const hasPitchSurface = byAxis[1].length > 0;
-    const lRole: ServoRole = hasPitchSurface ? 'aileron-l' : 'elevon-l';
-    const rRole: ServoRole = hasPitchSurface ? 'aileron-r' : 'elevon-r';
-    result.set(sorted[0].fieldName, {
-      fieldName: sorted[0].fieldName, role: lRole, confidence: 'inferred',
-      correlationScore: Math.abs(sorted[0].dominantSigned),
-    });
-    result.set(sorted[1].fieldName, {
-      fieldName: sorted[1].fieldName, role: rRole, confidence: 'inferred',
-      correlationScore: Math.abs(sorted[1].dominantSigned),
-    });
+    const arrA = servos.get(rollChans[0].fieldName);
+    const arrB = servos.get(rollChans[1].fieldName);
+    const pairR = arrA && arrB ? pearsonCorrelation(arrA, arrB) : 0;
+
+    if (pairR >= PAIR_THRESHOLD) {
+      // Paired-identical: BF mixer sends same PWM to both servos,
+      // physical reverse splits L/R downstream. L/R cannot be
+      // determined from the log alone. Standard wing setup.
+      const paired: ServoRole = hasPitchSurface ? 'aileron-paired' : 'elevon-paired';
+      for (const c of rollChans) {
+        result.set(c.fieldName, {
+          fieldName: c.fieldName, role: paired, confidence: 'inferred',
+          correlationScore: Math.abs(c.dominantSigned),
+        });
+      }
+    } else {
+      // Anti-correlated (or weakly coupled) → differential mixing →
+      // sign-split L/R. Sign convention is heuristic and may need
+      // flipping per-mixer; locked once preset table validates.
+      const sorted = [...rollChans].sort((a, b) => a.dominantSigned - b.dominantSigned);
+      const lRole: ServoRole = hasPitchSurface ? 'aileron-l' : 'elevon-l';
+      const rRole: ServoRole = hasPitchSurface ? 'aileron-r' : 'elevon-r';
+      result.set(sorted[0].fieldName, {
+        fieldName: sorted[0].fieldName, role: lRole, confidence: 'inferred',
+        correlationScore: Math.abs(sorted[0].dominantSigned),
+      });
+      result.set(sorted[1].fieldName, {
+        fieldName: sorted[1].fieldName, role: rRole, confidence: 'inferred',
+        correlationScore: Math.abs(sorted[1].dominantSigned),
+      });
+    }
   } else {
     for (const c of rollChans) {
       result.set(c.fieldName, {
@@ -297,7 +329,7 @@ export function classifyServos(args: ClassifyServosArgs): ClassifiedChannel[] {
     args.setpointPitch,
     args.setpointYaw,
   );
-  const inferred = rolesFromCorrelation(corrs);
+  const inferred = rolesFromCorrelation(corrs, args.servos);
 
   // Fill in any servo not in the correlation result with unclassified.
   const out: ClassifiedChannel[] = [];

@@ -83,10 +83,13 @@ describe('correlateServosToAxes', () => {
 });
 
 describe('classifyServos', () => {
-  test('two roll-dominant servos with opposite signs → Elevon-L + Elevon-R (delta wing)', () => {
+  test('two roll-dominant ANTI-correlated servos → Elevon-L + Elevon-R (true differential)', () => {
     const setpointRoll  = f32([0, 1, 2, 3, 4, 5]);
     const setpointPitch = f32([0, 0, 0, 0, 0, 0]);
     const setpointYaw   = f32([0, 0, 0, 0, 0, 0]);
+    // Opposite-sign correlations to roll = true differential mixing.
+    // pearson(servoPos, servoNeg) ≈ -1 → below PAIR_THRESHOLD, L/R
+    // split kicks in.
     const servoPos = f32([1500, 1520, 1540, 1560, 1580, 1600]);
     const servoNeg = f32([1500, 1480, 1460, 1440, 1420, 1400]);
     const servos = new Map([['servo[0]', servoPos], ['servo[1]', servoNeg]]);
@@ -98,11 +101,60 @@ describe('classifyServos', () => {
       setpointYaw,
     });
     const roles = new Map(out.map((c) => [c.fieldName, c.role]));
-    // One should be elevon-l, the other elevon-r. Sign convention is
-    // up to the classifier; we just assert the L/R split happened.
     expect(roles.size).toBe(2);
     const roleSet = new Set(roles.values());
     expect(roleSet.has('elevon-l') && roleSet.has('elevon-r')).toBe(true);
+  });
+
+  test('two roll-dominant CO-correlated servos → both Elevon (paired identical, canonical wing setup)', () => {
+    const setpointRoll  = f32([0, 1, 2, 3, 4, 5]);
+    const setpointPitch = f32([0, 0, 0, 0, 0, 0]);
+    const setpointYaw   = f32([0, 0, 0, 0, 0, 0]);
+    // Identical traces = BF mixer sends the same PWM to both servos
+    // and a physical reverse switch produces the actual L/R deflection.
+    // pearson(a, b) = 1 → above PAIR_THRESHOLD, paired branch fires.
+    const servoA = f32([1500, 1520, 1540, 1560, 1580, 1600]);
+    const servoB = f32([1500, 1520, 1540, 1560, 1580, 1600]);
+    const servos = new Map([['servo[0]', servoA], ['servo[1]', servoB]]);
+    const out = classifyServos({
+      mixerName: null,
+      servos,
+      setpointRoll,
+      setpointPitch,
+      setpointYaw,
+    });
+    const roles = out.map((c) => c.role);
+    // Both should be elevon-paired — no L/R commitment possible from PWM alone.
+    expect(roles).toEqual(['elevon-paired', 'elevon-paired']);
+  });
+
+  test('conventional craft with paired ailerons → both Aileron + Elevator + Rudder', () => {
+    // Roll-correlated paired servos + a pitch-dominant and a yaw-dominant
+    // surface. Because pitch surface is present, paired roll uses
+    // aileron-paired (not elevon-paired).
+    const setpointRoll  = f32([0, 1, 2, 3, 4, 5, 6, 7]);
+    const setpointPitch = f32([0, 0, 1, 1, 2, 2, 3, 3]);
+    const setpointYaw   = f32([0, 0, 0, 1, 0, 1, 0, 1]);
+    const aileronA = f32([1500, 1520, 1540, 1560, 1580, 1600, 1620, 1640]);
+    const aileronB = f32([1500, 1520, 1540, 1560, 1580, 1600, 1620, 1640]); // identical → paired
+    const elevator = f32([1500, 1500, 1520, 1520, 1540, 1540, 1560, 1560]);
+    const rudder   = f32([1500, 1500, 1500, 1540, 1500, 1540, 1500, 1540]);
+    const servos = new Map([
+      ['servo[0]', aileronA],
+      ['servo[1]', aileronB],
+      ['servo[2]', elevator],
+      ['servo[3]', rudder],
+    ]);
+    const out = classifyServos({
+      mixerName: null,
+      servos,
+      setpointRoll, setpointPitch, setpointYaw,
+    });
+    const roles = new Map(out.map((c) => [c.fieldName, c.role]));
+    expect(roles.get('servo[0]')).toBe('aileron-paired');
+    expect(roles.get('servo[1]')).toBe('aileron-paired');
+    expect(roles.get('servo[2]')).toBe('elevator');
+    expect(roles.get('servo[3]')).toBe('rudder');
   });
 
   test('conventional craft (roll + pitch + yaw surfaces) → aileron-l/r + elevator + rudder', () => {
