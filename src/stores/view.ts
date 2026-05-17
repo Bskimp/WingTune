@@ -20,6 +20,7 @@ export const DEFAULT_FIELD_CACHE_BYTES = 256 * 1024 * 1024;
 export type AnalysisTab =
   | 'summary'
   | 'tracking'
+  | 'servos'
   | 'spectrum'
   | 'step'
   | 'recommend';

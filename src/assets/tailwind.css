@@ -33,3 +33,14 @@
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
 }
+
+/* uPlot box-zoom selection rectangle. Default is rgba(0,0,0,0.07) which
+ * is invisible on Blueprint dark navy — Brian reported "I was about to
+ * say it wasn't even working" on the first run. Accent-tinted shade
+ * with a thin outline so the drag affordance reads clearly during the
+ * gesture without competing with the trace. Global because uPlot
+ * styles by class, not scoped element. */
+.u-select {
+  background: rgba(126, 200, 255, 0.18);
+  border: 1px solid rgba(126, 200, 255, 0.55);
+}

@@ -20,6 +20,7 @@ import TabBar from '@/components/analysis/TabBar.vue';
 import TimeBar from '@/components/analysis/TimeBar.vue';
 import CursorReadout from '@/components/analysis/CursorReadout.vue';
 import TrackingTab from '@/components/analysis/TrackingTab.vue';
+import ServosTab from '@/components/analysis/ServosTab.vue';
 import TabPlaceholder from '@/components/analysis/TabPlaceholder.vue';
 import CapabilitySummary from '@/components/CapabilitySummary.vue';
 
@@ -38,6 +39,7 @@ const { activeTab } = storeToRefs(view);
     <div class="mt-4">
       <CapabilitySummary v-if="activeTab === 'summary'" />
       <TrackingTab v-else-if="activeTab === 'tracking'" />
+      <ServosTab v-else-if="activeTab === 'servos'" />
       <TabPlaceholder
         v-else-if="activeTab === 'spectrum'"
         tab="Spectrum"

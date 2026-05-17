@@ -16,9 +16,13 @@ const { activeTab } = storeToRefs(view);
 type TabSpec = { id: AnalysisTab; label: string };
 
 // Recommend is intentionally absent — see top-of-file comment.
+// Servos sits next to Tracking because both are wing-actuator surfaces
+// (see `project-servo-first-class`); putting them adjacent keeps the
+// "what is my plane doing right now" tabs grouped.
 const TABS: TabSpec[] = [
   { id: 'summary',  label: 'Summary' },
   { id: 'tracking', label: 'Tracking' },
+  { id: 'servos',   label: 'Servos' },
   { id: 'spectrum', label: 'Spectrum' },
   { id: 'step',     label: 'Step' },
 ];
