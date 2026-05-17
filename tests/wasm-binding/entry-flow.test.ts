@@ -12,11 +12,20 @@
 // test covers the seam in the middle — the ScanReport-shape contract
 // between the parser and the components.
 //
-// Gated on log availability: defaults to LOG00113.BFL on Brian's box,
-// overridable via WINGTUNE_TEST_LOG, skipped if neither exists. The
-// hard-coded fallback is intentional — it's documented in the
-// `reference-test-logs` memory entry and lets the test "just run" in
-// the primary dev environment without env-var setup.
+// Gated on log availability via the `WINGTUNE_TEST_LOG` env var, which
+// must point at a real BF wing log. Skipped if the var isn't set or
+// the file doesn't exist — keeps the test suite green on machines
+// without a local corpus (fresh checkouts, CI).
+//
+// Per-user convenience: set the env var persistently in your shell
+// profile so the test "just runs" locally. On Windows powershell:
+//
+//   setx WINGTUNE_TEST_LOG "C:\path\to\LOG00113.BFL"
+//
+// On POSIX shells, add `export WINGTUNE_TEST_LOG=...` to ~/.bashrc
+// or ~/.zshrc. No hardcoded path in this file — that lived in an
+// earlier revision and was flagged in a security pass as awkward for
+// public distribution (private logs shouldn't be encoded into source).
 
 // @vitest-environment happy-dom
 
@@ -31,8 +40,7 @@ import CapabilitySummary from '../../src/components/CapabilitySummary.vue';
 import { useLogStore } from '../../src/stores/log';
 
 const ENV_LOG = process.env.WINGTUNE_TEST_LOG;
-const DEFAULT_LOG = 'C:/Users/Sista/Desktop/al logs/LOG00113.BFL';
-const LOG_PATH = ENV_LOG ?? (existsSync(DEFAULT_LOG) ? DEFAULT_LOG : null);
+const LOG_PATH = ENV_LOG && existsSync(ENV_LOG) ? ENV_LOG : null;
 
 const describeIfLog = LOG_PATH ? describe : describe.skip;
 
