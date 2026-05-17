@@ -134,6 +134,13 @@ export const useLogStore = defineStore('log', () => {
     }
   }
 
+  /** Exposed so the Tauri file-picker path can surface fs.readFile
+   *  failures through the same UI affordance as scan failures
+   *  (DECODING → REJECTED transition in FileDropZone). */
+  function setScanError(err: unknown) {
+    scanError.value = err;
+  }
+
   /** Ensure each named field is present in `fields`. Already-resident or
    *  currently-hydrating fields are skipped. Returns when every requested
    *  field has either landed in `fields` or failed (failures throw). */
@@ -179,5 +186,6 @@ export const useLogStore = defineStore('log', () => {
     loadFile,
     ensureFields,
     reset,
+    setScanError,
   };
 });

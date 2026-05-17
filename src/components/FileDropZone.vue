@@ -15,6 +15,7 @@ import { computed, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 
 import { useLogStore } from '@/stores/log';
+import { isTauri, pickAndOpenLogFile } from '@/lib/tauriBridge';
 import IconUpload from '@/components/icons/IconUpload.vue';
 import IconFile from '@/components/icons/IconFile.vue';
 
@@ -124,6 +125,20 @@ function openPicker() {
   fileInput.value?.click();
 }
 
+const inTauri = isTauri();
+
+async function openNativePicker() {
+  try {
+    const file = await pickAndOpenLogFile();
+    if (file) await accept(file);
+  } catch (err) {
+    // pickAndOpenLogFile rejects only on fs.readFile failure
+    // (file deleted mid-flow, permission denied). Route through
+    // the same scanError surface as a failed scan.
+    logStore.setScanError(err);
+  }
+}
+
 function dismissError() {
   logStore.reset();
 }
@@ -201,6 +216,16 @@ function dismissError() {
             Select file
           </button>
           <button
+            v-if="inTauri"
+            type="button"
+            class="px-3.5 py-[7px] bg-transparent text-bp-ink-2 border border-bp-line-2 font-sans font-semibold text-[12px] tracking-[0.04em] cursor-pointer hover:text-bp-ink hover:border-bp-accent"
+            title="Open via the native file dialog (Tauri desktop only)"
+            @click="openNativePicker"
+          >
+            Open file…
+          </button>
+          <button
+            v-else
             type="button"
             class="px-3.5 py-[7px] bg-transparent text-bp-ink-2 border border-bp-line-2 font-sans font-semibold text-[12px] tracking-[0.04em] cursor-not-allowed opacity-60"
             disabled
