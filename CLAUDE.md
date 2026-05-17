@@ -10,7 +10,8 @@
 Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
 M1 functionally complete (corpus track aside); M2 emission loop
 landed; M3 BASIC airspeed fit + recommender landed (visual validation
-on a clean wing calibration flight still pending).
+on a clean wing calibration flight still pending); M4 spectrum tab +
+filter analysis + spectrum recommenders landed.
 
 **Done:**
 
@@ -92,6 +93,37 @@ on a clean wing calibration flight still pending).
   exposes `gpsTimeSec`. `lib/timeAlign.ts` resamples GPS values onto
   the main-frame axis (single-sweep linear interpolation, endpoint-
   clamping for pre-/post-fix windows).
+- Sample-check + airspeed-readiness state machine: scan.rs now
+  populates `sample_check` per field (stride-sampling main frames,
+  every GPS frame; tracks first non-zero seen). FieldTable surfaces
+  "empty" / "all samples zero" for fields like `gps:GPS_speed` on
+  logs where GPS never locked. `checkAirspeedAutoTune` predicate
+  refined into a 4-state machine: blocked (no GPS) / inactive (GPS
+  present but never locked) / partial (BASIC fit runnable, no
+  DEBUG_TPA cross-check) / available (full).
+- Pitch sign convention fix: BF logs `attitude[1]` NEGATIVE for nose-
+  up; integrator works in nose-up-positive convention so
+  `buildAirspeedFitInputs` negates at the boundary (single source of
+  truth for the unit). Verified 2026-05-17 by Brian against firmware.
+- M4 spectrum tab (slices 1-4): `lib/spectrum.ts` — hand-rolled
+  radix-2 Cooley-Tukey FFT + Hann window + Welch's method (PSD via
+  averaged windowed periodograms, no external dep). `SpectrumPanel`
+  shows per-axis gyro PSD (R/P/Y overlaid, log frequency, dB
+  magnitude) with drag-to-zoom, axis toggle chips, and a `filt`/`raw`
+  /`both` mode selector (raw via DEBUG_GYRO_RAW signal-registry
+  entry). Filter overlays render dyn-notch coverage band + LPF
+  cutoff lines + RPM filter markers via uPlot draw hook, each
+  togglable independently. `lib/filterDelay.ts` computes per-stage +
+  total group-delay budget; surfaced as a header badge (green <5 ms /
+  orange 5-8 / red >8) with per-stage tooltip. Filter config
+  extracted in `scan.rs` from `headers.unknown()` into typed
+  `FilterConfig { dyn_notch + 4 LPFs + rpm_filter }`. Spectrum
+  recommender (`lib/recommenders/spectrumFilter.ts`) emits
+  notch-coverage extension recs (peak detection ≥6 dB above local
+  baseline, yellow confidence) and filter-delay informational recs
+  (no CLI — which stage to trim is a judgment call). Pre/post-
+  filter gyro overlay closes the loop on visualising what the filter
+  chain removes.
 
 **In flight / pending:**
 
