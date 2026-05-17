@@ -7,7 +7,7 @@
 //! `voltage_sag_summary`, and a real `frame_index` are stubbed (empty /
 //! `None` / empty) and filled in by follow-ups.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use blackbox_log::File;
 use blackbox_log::data::ParserEvent;
@@ -15,7 +15,9 @@ use blackbox_log::event::Event;
 use blackbox_log::frame::{Frame, FrameDef};
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{CapabilityReport, FrameIndex, SampleCheck};
+use crate::capability::{
+    CapabilityReport, DynNotchConfig, FilterConfig, FrameIndex, LowPassConfig, SampleCheck,
+};
 use crate::event::EventFrame;
 use crate::hydrate::{gps_value_to_f32, main_value_to_f32};
 
@@ -40,6 +42,10 @@ pub struct ScanReport {
     pub firmware_date: Option<String>,
     pub board_info: Option<String>,
     pub craft_name: Option<String>,
+    /// Gyro/D-term LP + dyn-notch settings parsed from the BBL
+    /// header's free-form text. Empty fields when the log's BF version
+    /// uses different key names or the filter is OFF.
+    pub filter_config: FilterConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +71,16 @@ pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
     let board_info = headers.board_info().map(|s| s.to_string());
     let craft_name = headers.craft_name().map(|s| s.to_string());
     let debug_mode = Some(format!("{:?}", headers.debug_mode()));
+    // blackbox-log returns hashbrown::HashMap from headers.unknown();
+    // copy into a std HashMap at this boundary so the rest of the
+    // parsing code uses the project-standard type. Header k/v count
+    // is small (≤ ~200 entries) so the copy is negligible.
+    let unknown_std: HashMap<&str, &str> = headers
+        .unknown()
+        .iter()
+        .map(|(k, v)| (*k, *v))
+        .collect();
+    let filter_config = parse_filter_config(&unknown_std);
 
     let mut fields_present: Vec<String> = headers
         .main_frame_def()
@@ -176,7 +192,82 @@ pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
         firmware_date,
         board_info,
         craft_name,
+        filter_config,
     })
+}
+
+fn parse_filter_config(unknown: &HashMap<&str, &str>) -> FilterConfig {
+    FilterConfig {
+        dyn_notch:  parse_dyn_notch(unknown),
+        gyro_lpf1:  parse_lpf(unknown, "gyro_lpf1"),
+        gyro_lpf2:  parse_lpf(unknown, "gyro_lpf2"),
+        dterm_lpf1: parse_lpf(unknown, "dterm_lpf1"),
+        dterm_lpf2: parse_lpf(unknown, "dterm_lpf2"),
+    }
+}
+
+fn parse_dyn_notch(unknown: &HashMap<&str, &str>) -> Option<DynNotchConfig> {
+    let count = parse_u32(unknown, "dyn_notch_count").unwrap_or(0);
+    if count == 0 { return None; }
+    Some(DynNotchConfig {
+        count,
+        min_hz: parse_u32(unknown, "dyn_notch_min_hz").unwrap_or(0),
+        max_hz: parse_u32(unknown, "dyn_notch_max_hz").unwrap_or(0),
+        q:      parse_u32(unknown, "dyn_notch_q").unwrap_or(0),
+    })
+}
+
+fn parse_lpf(unknown: &HashMap<&str, &str>, prefix: &str) -> Option<LowPassConfig> {
+    let type_key = format!("{prefix}_type");
+    let raw_type = unknown.get(type_key.as_str()).map(|s| s.to_string())?;
+    // BF logs the filter type as either an integer enum index (older
+    // versions: "0" = PT1, "1" = BIQUAD, "2" = PT2, "3" = PT3) or a
+    // name string (newer versions: "PT1", "BIQUAD", etc.). Only the
+    // literal "OFF" disables the filter — "0" in this position is the
+    // default PT1 enum value, NOT the off marker (gyro_hardware_lpf
+    // handles real off).
+    let display_type = match raw_type.to_ascii_uppercase().as_str() {
+        "0"    => "PT1".to_string(),
+        "1"    => "BIQUAD".to_string(),
+        "2"    => "PT2".to_string(),
+        "3"    => "PT3".to_string(),
+        "OFF"  => return None,
+        _      => raw_type,
+    };
+
+    let static_hz = parse_u32(unknown, &format!("{prefix}_static_hz"));
+    // Dynamic LPF range is logged as "min,max" in a single _dyn_hz key
+    // (BF convention). Absent or "0,0" means dynamic LPF is disabled.
+    let (dyn_min_hz, dyn_max_hz) = parse_dyn_hz_pair(unknown, &format!("{prefix}_dyn_hz"));
+
+    // If neither static nor dynamic cutoff is configured, the filter
+    // is effectively off regardless of what _type says.
+    if static_hz.unwrap_or(0) == 0 && dyn_min_hz.is_none() {
+        return None;
+    }
+
+    Some(LowPassConfig {
+        filter_type: display_type,
+        static_hz,
+        dyn_min_hz,
+        dyn_max_hz,
+    })
+}
+
+fn parse_dyn_hz_pair(unknown: &HashMap<&str, &str>, key: &str) -> (Option<u32>, Option<u32>) {
+    let Some(value) = unknown.get(key) else { return (None, None); };
+    let parts: Vec<u32> = value
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect();
+    if parts.len() != 2 || (parts[0] == 0 && parts[1] == 0) {
+        return (None, None);
+    }
+    (Some(parts[0]), Some(parts[1]))
+}
+
+fn parse_u32(unknown: &HashMap<&str, &str>, key: &str) -> Option<u32> {
+    unknown.get(key).and_then(|s| s.trim().parse::<u32>().ok())
 }
 
 fn map_event(e: Event, time_sec: f32) -> EventFrame {

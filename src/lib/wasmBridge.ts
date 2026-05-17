@@ -38,6 +38,33 @@ export interface CapabilityReport {
   voltage_sag_summary: VoltageSagSummary | null;
 }
 
+export interface DynNotchConfig {
+  count: number;
+  min_hz: number;
+  max_hz: number;
+  /** BF logs Q × 100 — actual Q is `q / 100`. */
+  q: number;
+}
+
+export interface LowPassConfig {
+  /** Normalised: "PT1", "BIQUAD", "PT2", "PT3" (older BF integer types
+   *  translated by scan.rs). Unknown types pass through verbatim. */
+  filter_type: string;
+  /** Static cutoff in Hz, or null when dynamic-only. */
+  static_hz: number | null;
+  /** Dynamic LP range — present when BF varies cutoff with throttle. */
+  dyn_min_hz: number | null;
+  dyn_max_hz: number | null;
+}
+
+export interface FilterConfig {
+  dyn_notch:  DynNotchConfig | null;
+  gyro_lpf1:  LowPassConfig | null;
+  gyro_lpf2:  LowPassConfig | null;
+  dterm_lpf1: LowPassConfig | null;
+  dterm_lpf2: LowPassConfig | null;
+}
+
 export type EventFrame =
   | { kind: 'flight_mode_change'; time_sec: number; flags: number }
   | { kind: 'arming'; time_sec: number }
@@ -59,6 +86,7 @@ export interface ScanReport {
   firmware_date: string | null;
   board_info: string | null;
   craft_name: string | null;
+  filter_config: FilterConfig;
 }
 
 /** Pre-conversion shape of `ScanReport` as it comes out of

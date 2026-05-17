@@ -9,7 +9,10 @@ pub mod event;
 pub mod hydrate;
 pub mod scan;
 
-pub use capability::{CapabilityReport, FrameIndex, SampleCheck, VoltageSagSummary};
+pub use capability::{
+    CapabilityReport, DynNotchConfig, FilterConfig, FrameIndex, LowPassConfig, SampleCheck,
+    VoltageSagSummary,
+};
 pub use event::EventFrame;
 pub use hydrate::{hydrate as hydrate_impl, HydrateError, HydrateResult};
 pub use scan::{scan, ScanError, ScanReport};
@@ -156,6 +159,7 @@ mod tests {
             report.capability.debug_mode,
             report.firmware_revision,
         );
+        eprintln!("filter_config: {:?}", report.filter_config);
 
         // M1.3.2: now hydrate the first three available main-frame fields
         // and confirm we get sample-count equal to total_frames for each.
@@ -231,6 +235,7 @@ mod tests {
             firmware_date: None,
             board_info: None,
             craft_name: None,
+            filter_config: FilterConfig::default(),
         };
         let json = serde_json::to_string(&report).expect("serialize");
         let back: ScanReport = serde_json::from_str(&json).expect("deserialize");

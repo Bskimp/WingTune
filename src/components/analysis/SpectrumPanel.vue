@@ -26,6 +26,8 @@ import { useLogStore } from '@/stores/log';
 import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { welchPsd, psdToDb, estimateSampleRate } from '@/lib/spectrum';
+import { computeDelayBudget, type FilterDelayBudget } from '@/lib/filterDelay';
+import type { FilterConfig, LowPassConfig } from '@/lib/wasmBridge';
 
 const COLORS = {
   ink3:   '#7a90b0',
@@ -54,7 +56,18 @@ const AXES: AxisSpec[] = [
 
 const logStore = useLogStore();
 const view = useViewStore();
-const { time, fields, hydrating } = storeToRefs(logStore);
+const { time, fields, hydrating, scanReport } = storeToRefs(logStore);
+
+const filterConfig = computed<FilterConfig | null>(
+  () => scanReport.value?.filter_config ?? null,
+);
+const delayBudget = computed<FilterDelayBudget | null>(() => {
+  const fc = filterConfig.value;
+  if (!fc) return null;
+  return computeDelayBudget(fc);
+});
+
+const overlayEnabled = ref(true);
 
 onMounted(() => {
   logStore.ensureFields(AXES.map((a) => a.field));
@@ -162,6 +175,75 @@ const opts = computed<Options>(() => ({
       values: (_u, splits) => splits.map((v) => `${v.toFixed(0)} dB`),
     },
   ],
+  hooks: {
+    // Filter overlay renderer. Reads filterConfig + overlayEnabled at
+    // draw time so toggling the overlay or loading a new log just
+    // needs a plot.redraw() (no full uPlot rebuild). The explicit
+    // watch below does that.
+    draw: [
+      (u) => {
+        if (!overlayEnabled.value) return;
+        const fc = filterConfig.value;
+        if (!fc) return;
+        const ctx = u.ctx;
+        const top = u.bbox.top;
+        const height = u.bbox.height;
+
+        ctx.save();
+
+        // Dynamic notch coverage band — the range BF scans for peaks.
+        if (fc.dyn_notch && fc.dyn_notch.min_hz > 0 && fc.dyn_notch.max_hz > fc.dyn_notch.min_hz) {
+          const x1 = u.valToPos(fc.dyn_notch.min_hz, 'x', true);
+          const x2 = u.valToPos(fc.dyn_notch.max_hz, 'x', true);
+          ctx.fillStyle = 'rgba(255, 196, 106, 0.10)';
+          ctx.fillRect(x1, top, x2 - x1, height);
+          ctx.strokeStyle = 'rgba(255, 196, 106, 0.55)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x1, top); ctx.lineTo(x1, top + height);
+          ctx.moveTo(x2, top); ctx.lineTo(x2, top + height);
+          ctx.stroke();
+        }
+
+        const drawLpf = (lpf: LowPassConfig | null, color: string) => {
+          if (!lpf) return;
+          const dynMin = lpf.dyn_min_hz;
+          const dynMax = lpf.dyn_max_hz;
+          if (dynMin != null && dynMax != null && dynMax > dynMin) {
+            // Dynamic LP: shade the cutoff range.
+            const x1 = u.valToPos(dynMin, 'x', true);
+            const x2 = u.valToPos(dynMax, 'x', true);
+            ctx.fillStyle = color + '1c';   // ~11% alpha
+            ctx.fillRect(x1, top, x2 - x1, height);
+            ctx.strokeStyle = color + 'aa';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x1, top); ctx.lineTo(x1, top + height);
+            ctx.moveTo(x2, top); ctx.lineTo(x2, top + height);
+            ctx.stroke();
+          } else {
+            const fcHz = lpf.static_hz ?? 0;
+            if (fcHz <= 0) return;
+            const x = u.valToPos(fcHz, 'x', true);
+            ctx.strokeStyle = color + 'cc';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(x, top); ctx.lineTo(x, top + height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        };
+        // Gyro LPFs in ink2 (cooler), D-term LPFs in a slightly darker ink3.
+        drawLpf(fc.gyro_lpf1,  '#b6c7e0');
+        drawLpf(fc.gyro_lpf2,  '#b6c7e0');
+        drawLpf(fc.dterm_lpf1, '#7a90b0');
+        drawLpf(fc.dterm_lpf2, '#7a90b0');
+
+        ctx.restore();
+      },
+    ],
+  },
 }));
 
 const hostRef = ref<HTMLDivElement | null>(null);
@@ -209,6 +291,10 @@ watch(
   { immediate: true },
 );
 
+// Filter overlay live-redraw — the draw hook reads filterConfig + the
+// toggle directly so we only need to ping the chart on changes.
+watch([overlayEnabled, filterConfig], () => plot.redraw());
+
 function resetZoom() {
   // Override the default resetZoom (which resets to data extent) so
   // the reset goes back to the initial 0-300 Hz view, not the full
@@ -243,6 +329,17 @@ const segmentInfo = computed(() => {
   const resolutionHz = sampleRateHz.value / SEGMENT_LEN;
   return `${SEGMENT_LEN}-pt Welch · ${r.numSegments.toLocaleString()} segments · ${resolutionHz.toFixed(2)} Hz/bin`;
 });
+
+const delayBudgetTooltip = computed(() => {
+  const b = delayBudget.value;
+  if (!b || b.stages.length === 0) return '';
+  const lines = b.stages.map(
+    (s) => `${s.name} (${s.detail}): ${s.delayMs.toFixed(2)} ms`,
+  );
+  lines.push(`────────────`);
+  lines.push(`total: ${b.totalMs.toFixed(2)} ms`);
+  return lines.join('\n');
+});
 </script>
 
 <template>
@@ -264,6 +361,30 @@ const segmentInfo = computed(() => {
           <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">sample rate</div>
           <div class="font-mono text-[13px] text-bp-ink">{{ sampleRateHz.toFixed(0) }} Hz</div>
         </div>
+
+        <div
+          v-if="delayBudget && delayBudget.stages.length > 0"
+          class="text-right"
+          :title="delayBudgetTooltip"
+        >
+          <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">filter delay</div>
+          <div
+            class="font-mono text-[13px]"
+            :class="delayBudget.totalMs > 8 ? 'text-bp-stamp' : delayBudget.totalMs > 5 ? 'text-bp-warn' : 'text-bp-ink'"
+          >{{ delayBudget.totalMs.toFixed(1) }} ms</div>
+        </div>
+
+        <button
+          v-if="filterConfig && (filterConfig.dyn_notch || filterConfig.gyro_lpf1 || filterConfig.gyro_lpf2 || filterConfig.dterm_lpf1 || filterConfig.dterm_lpf2)"
+          type="button"
+          class="px-2 py-[3px] font-mono text-[11px] font-semibold border cursor-pointer whitespace-nowrap"
+          :class="overlayEnabled
+            ? 'bg-bp-warn text-bp-bg border-bp-warn'
+            : 'bg-bp-surface-2 text-bp-ink-3 border-bp-line-2 hover:text-bp-ink'"
+          :aria-pressed="overlayEnabled"
+          title="Toggle filter overlay (dyn notch band + LPF cutoffs)"
+          @click="overlayEnabled = !overlayEnabled"
+        >filter</button>
 
         <!-- axis toggle chips (per-axis show/hide via view.hiddenSeries) -->
         <div class="flex gap-px">
