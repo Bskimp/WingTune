@@ -17,9 +17,11 @@ import { storeToRefs } from 'pinia';
 import type { AlignedData, Options, Series } from 'uplot';
 
 import { useLogStore } from '@/stores/log';
-import { useViewStore } from '@/stores/view';
+import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
+import { useCursorSamples } from '@/composables/useCursorSamples';
+import { nearestTimeIndex } from '@/lib/dtype';
 import { pidfsShares, type PIDFSArrays, type PIDFSTerm } from '@/lib/pidfs';
 
 type AxisId = 0 | 1 | 2;
@@ -248,6 +250,38 @@ const dominantColor = computed(() => {
   if (!d) return COLORS.dim;
   return TERM_SPECS.find((t) => t.term === d)!.color;
 });
+
+// --- live cursor sample contributions ---
+//
+// Maps each present term's value at cursor.t into a CursorSample row.
+// Hidden terms are excluded (matches what's actually on the chart).
+// Term tones use the closest design-token mapping; the chart's exact
+// colors aren't reproducible through the limited tone palette but the
+// readout intent is clear.
+const TERM_TONE: Record<PIDFSTerm, CursorSample['tone']> = {
+  P: 'accent',
+  I: 'ink',
+  D: 'stamp',
+  F: 'ok',
+  S: 'warn',
+};
+
+const { cursorTime } = storeToRefs(view);
+const liveSamples = computed<CursorSample[]>(() => {
+  if (!ready.value || cursorTime.value === null) return [];
+  const idx = nearestTimeIndex(time.value, cursorTime.value);
+  if (idx === null) return [];
+  const ax = axisSpec.value.label;
+  return presentTerms.value
+    .filter((t) => !isHidden(t.term))
+    .map((t) => ({
+      label: `${t.term}${axisSpec.value.short}`,
+      value: (termArrays.value[t.term]![idx] as number).toFixed(0),
+      tone: TERM_TONE[t.term],
+      hint: `${t.term}-term · ${ax} — ${t.hint}`,
+    }));
+});
+useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
 </script>
 
 <template>

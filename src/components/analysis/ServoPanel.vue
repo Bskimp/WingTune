@@ -23,9 +23,11 @@ import { storeToRefs } from 'pinia';
 import type { AlignedData, Options, Series } from 'uplot';
 
 import { useLogStore } from '@/stores/log';
-import { useViewStore } from '@/stores/view';
+import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
+import { useCursorSamples } from '@/composables/useCursorSamples';
+import { nearestTimeIndex } from '@/lib/dtype';
 
 // Cycle of Blueprint-compatible colors per channel. uPlot needs concrete
 // CSS strings; keep in sync with tailwind.css @theme block. The first
@@ -245,6 +247,30 @@ watch(activeChannels, syncSeriesVisibility, { deep: false });
 function toggleChannel(fieldName: string) {
   view.toggleSeries(fieldName);
 }
+
+// --- live cursor sample contributions ---
+//
+// Visible (non-hidden) channels only — matches what's actually on the
+// chart. Labels use the field name (e.g. "servo[1]") because the role
+// classifier isn't here yet; once M2 ships, replace with the
+// classified role ("Elevon-L") for confident labels.
+const { cursorTime } = storeToRefs(view);
+const liveSamples = computed<CursorSample[]>(() => {
+  if (!ready.value || cursorTime.value === null) return [];
+  const idx = nearestTimeIndex(time.value, cursorTime.value);
+  if (idx === null) return [];
+  return activeChannels.value
+    .filter((c) => !hiddenSeries.value.has(c.fieldName))
+    .map((c) => ({
+      label: c.fieldName,
+      value: (fields.value.get(c.fieldName)?.[idx] ?? 0).toFixed(0),
+      tone: c.kind === 'motor' ? 'ok' : 'ink',
+      hint: c.kind === 'motor'
+        ? `Motor channel ${c.index} — raw PWM output (µs)`
+        : `Servo channel ${c.index} — raw PWM output (µs) · role classifier pending (M2)`,
+    }));
+});
+useCursorSamples({ sourceKey: 'servos', samples: liveSamples });
 
 function resetZoom() {
   plot.resetZoom();

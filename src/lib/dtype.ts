@@ -38,3 +38,23 @@ export function secondsFromMicros(micros: number | bigint): number {
 export function float32ArrayBytes(arr: Float32Array): number {
   return arr.byteLength;
 }
+
+/** Binary search for the index in a sorted ascending `time` array whose
+ *  value is nearest to `t`. Returns `null` for an empty array. Out-of-
+ *  range values clamp to the nearest endpoint. Used by the cursor-live
+ *  readouts to pick the sample under the user's cursor without a
+ *  linear scan per chart per hover. */
+export function nearestTimeIndex(time: Float32Array, t: number): number | null {
+  const n = time.length;
+  if (n === 0) return null;
+  if (t <= time[0]) return 0;
+  if (t >= time[n - 1]) return n - 1;
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >>> 1;
+    if (time[mid] > t) hi = mid;
+    else lo = mid;
+  }
+  return Math.abs(time[lo] - t) <= Math.abs(time[hi] - t) ? lo : hi;
+}

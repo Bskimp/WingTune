@@ -21,9 +21,11 @@ import { storeToRefs } from 'pinia';
 import type { AlignedData, Options } from 'uplot';
 
 import { useLogStore } from '@/stores/log';
-import { useViewStore } from '@/stores/view';
+import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
+import { useCursorSamples } from '@/composables/useCursorSamples';
+import { nearestTimeIndex } from '@/lib/dtype';
 import { trackingStats } from '@/lib/trackingStats';
 
 type AxisSpec = {
@@ -160,6 +162,39 @@ function selectAxis(id: 0 | 1 | 2) {
 function resetZoom() {
   plot.resetZoom();
 }
+
+// --- live cursor sample contributions ---
+const { cursorTime } = storeToRefs(view);
+const liveSamples = computed<CursorSample[]>(() => {
+  if (!ready.value || cursorTime.value === null) return [];
+  const idx = nearestTimeIndex(time.value, cursorTime.value);
+  if (idx === null) return [];
+  const sp = setpointArr.value![idx];
+  const gy = gyroArr.value![idx];
+  const err = gy - sp;
+  const ax = axisSpec.value.label;
+  return [
+    {
+      label: `sp ${axisSpec.value.short}`,
+      value: sp.toFixed(1),
+      tone: 'ink',
+      hint: `Setpoint · ${ax} — commanded rate from the mixer`,
+    },
+    {
+      label: `gyro ${axisSpec.value.short}`,
+      value: gy.toFixed(1),
+      tone: 'accent',
+      hint: `Gyro · ${ax} — measured angular rate`,
+    },
+    {
+      label: `err ${axisSpec.value.short}`,
+      value: `${err >= 0 ? '+' : ''}${err.toFixed(1)}`,
+      tone: Math.abs(err) > 100 ? 'stamp' : Math.abs(err) > 30 ? 'warn' : 'ok',
+      hint: `Tracking error · ${ax} — gyro minus setpoint (sign = direction of lag/overshoot)`,
+    },
+  ];
+});
+useCursorSamples({ sourceKey: 'tracking', samples: liveSamples });
 </script>
 
 <template>

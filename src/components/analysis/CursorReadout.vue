@@ -1,22 +1,19 @@
 <script setup lang="ts">
 // Strip directly below the time bar. When the cursor is null, shows a
-// hint. When set, shows the time clock and any values the tracking
-// panel has registered. Per-tab readouts (setpoint/gyro at cursor,
-// FFT bin at cursor, etc.) will plug additional samples in via the
-// `samples` prop as those tabs come online.
+// hint. When set, shows the time clock + the aggregate of per-panel
+// sample rows pushed into view.cursorSamples via useCursorSamples.
+//
+// Order: insertion order of the Map — first-registered panel reads
+// leftmost. Panels are responsible for stable ordering of their own
+// rows; this strip just flattens.
 
 import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 
-import { useViewStore } from '@/stores/view';
-
-defineProps<{
-  /** Per-tab cursor samples, e.g. [['gyro R', '12.4 °/s'], …]. */
-  samples?: Array<{ label: string; value: string; tone?: 'ink' | 'accent' | 'ok' | 'warn' | 'stamp' }>;
-}>();
+import { useViewStore, type CursorSample } from '@/stores/view';
 
 const view = useViewStore();
-const { cursorTime, cursorPinned } = storeToRefs(view);
+const { cursorTime, cursorPinned, cursorSamples } = storeToRefs(view);
 
 function formatClock(seconds: number | null): string {
   if (seconds == null) return '—';
@@ -28,6 +25,14 @@ function formatClock(seconds: number | null): string {
 }
 
 const clock = computed(() => formatClock(cursorTime.value));
+
+const flatSamples = computed<CursorSample[]>(() => {
+  const out: CursorSample[] = [];
+  for (const rows of cursorSamples.value.values()) {
+    for (const r of rows) out.push(r);
+  }
+  return out;
+});
 
 function toneToClass(tone: 'ink' | 'accent' | 'ok' | 'warn' | 'stamp' | undefined): string {
   switch (tone) {
@@ -43,21 +48,22 @@ function toneToClass(tone: 'ink' | 'accent' | 'ok' | 'warn' | 'stamp' | undefine
 
 <template>
   <div
-    class="flex justify-between items-center px-3.5 py-1.5 bg-bp-surface border border-bp-line-2 border-t-0 font-mono text-[11.5px]"
+    class="flex justify-between items-center px-3.5 py-1.5 bg-bp-surface border border-bp-line-2 border-t-0 font-mono text-[11.5px] gap-3"
   >
-    <div v-if="cursorTime === null" class="text-bp-ink-3">
+    <div v-if="cursorTime === null" class="text-bp-ink-3 truncate">
       hover a time-domain chart to read values · click the time bar to pin
     </div>
 
-    <div v-else class="flex gap-4 items-baseline">
+    <div v-else class="flex flex-wrap gap-x-4 gap-y-1 items-baseline min-w-0">
       <span class="flex gap-1.5 items-baseline">
         <span class="font-sans text-[9.5px] tracking-[0.16em] font-bold uppercase text-bp-ink-3">t</span>
         <span class="text-bp-ink">{{ clock }}</span>
       </span>
       <span
-        v-for="s in samples ?? []"
-        :key="s.label"
-        class="flex gap-1.5 items-baseline"
+        v-for="(s, i) in flatSamples"
+        :key="`${s.label}-${i}`"
+        class="flex gap-1.5 items-baseline cursor-help"
+        :title="s.hint ?? s.label"
       >
         <span class="font-sans text-[9.5px] tracking-[0.16em] font-bold uppercase text-bp-ink-3">
           {{ s.label }}
@@ -66,7 +72,7 @@ function toneToClass(tone: 'ink' | 'accent' | 'ok' | 'warn' | 'stamp' | undefine
       </span>
     </div>
 
-    <div class="flex items-center gap-2.5">
+    <div class="flex items-center gap-2.5 shrink-0">
       <span
         v-if="cursorPinned"
         class="px-1.5 py-px border border-bp-accent text-bp-accent font-sans text-[9px] tracking-[0.18em] font-bold uppercase"

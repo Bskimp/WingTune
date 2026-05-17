@@ -8,6 +8,19 @@
 import { defineStore } from 'pinia';
 import { ref, shallowRef } from 'vue';
 
+/** One row of the cursor readout strip. Panels push these into the
+ *  view store via `useCursorSamples`; the readout aggregates and
+ *  renders. Tones map to the design palette — keep in sync with
+ *  CursorReadout's `toneToClass`. `hint` becomes the row's native
+ *  `title` tooltip — useful for the abbreviated chip labels
+ *  ("PR" → "P-term · Roll"). */
+export interface CursorSample {
+  label: string;
+  value: string;
+  tone?: 'ink' | 'accent' | 'ok' | 'warn' | 'stamp';
+  hint?: string;
+}
+
 /** Default LRU cache cap on hydrated fields. The eviction policy itself
  *  is deferred to M1.7 (multi-log multiplies pressure); for M1.3 this is
  *  a documented constant that `view.ts` exposes for later use. */
@@ -48,6 +61,12 @@ export const useViewStore = defineStore('view', () => {
    *  Set value (replaced wholesale on toggle) so Vue's ref reactivity
    *  fires on changes. */
   const hiddenSeries = ref<Set<string>>(new Set());
+
+  /** Per-panel sample contributions to the cursor readout, keyed by a
+   *  panel-chosen `sourceKey` (e.g. "tracking-roll", "pid-roll",
+   *  "servos"). The readout flattens this map into a single ordered
+   *  strip. Entries clear on panel unmount via `useCursorSamples`. */
+  const cursorSamples = shallowRef<Map<string, CursorSample[]>>(new Map());
 
   /** Active workspace identifier — M1.4+ will populate this from the
    *  curated workspace registry. `null` means "no workspace selected yet". */
@@ -102,11 +121,27 @@ export const useViewStore = defineStore('view', () => {
     return hiddenSeries.value.has(fieldName);
   }
 
+  /** Register or update a panel's contribution to the cursor readout. */
+  function setCursorSamples(sourceKey: string, samples: CursorSample[]) {
+    const next = new Map(cursorSamples.value);
+    next.set(sourceKey, samples);
+    cursorSamples.value = next;
+  }
+
+  /** Remove a panel's contribution — call on unmount. */
+  function clearCursorSamples(sourceKey: string) {
+    if (!cursorSamples.value.has(sourceKey)) return;
+    const next = new Map(cursorSamples.value);
+    next.delete(sourceKey);
+    cursorSamples.value = next;
+  }
+
   return {
     activeTab,
     cursorTime,
     cursorPinned,
     hiddenSeries,
+    cursorSamples,
     activeWorkspace,
     scrubStart,
     scrubEnd,
@@ -118,5 +153,7 @@ export const useViewStore = defineStore('view', () => {
     clearCursor,
     toggleSeries,
     isSeriesHidden,
+    setCursorSamples,
+    clearCursorSamples,
   };
 });
