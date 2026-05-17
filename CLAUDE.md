@@ -1,3 +1,31 @@
+> [!IMPORTANT]
+> ## SCOPE — PLANES, NOT QUADS
+>
+> **WingTune is for fixed-wing Betaflight logs.** Betaflight itself, every
+> open-source log analyzer in this space (PIDtoolbox, PIDscope, Plasmatree,
+> Blackbox Log Viewer), and many of the firmware defaults bake in
+> **multirotor assumptions** — quad response times (~20-80 ms), quad noise
+> bands (50-500 Hz), differential mixer signals, throttle-scheduled gains,
+> PIDF (no S) controller.
+>
+> **Wings live in a different regime:** 200-500 ms closed-loop response,
+> sub-50 Hz interesting noise, paired-identical servo PWMs (physical
+> reverse splits L/R, not the mixer), airspeed-scheduled TPA, PIDFS with
+> S-term as the dominant maneuver driver.
+>
+> Translation is required every time we adopt a formula, threshold, time
+> window, or convention from quad-side reference code. Concrete examples
+> hit this session: PIDscope's 150 ms peak window is quad-tuned (wing
+> needs 500-800 ms); the L/R sign-split assumption broke on Brian's
+> twin-motor plane because wing servos are paired-identical not
+> differential; wing setpoints have huge low-freq energy that quad
+> Wiener-λ formulas don't account for.
+>
+> **When in doubt, ask: "is this assumption true for wings?"** If a
+> reference tool says one thing and the wing physics says another, the
+> wing physics wins. Document any quad-tuned default we keep so future
+> calibration can replace it deliberately.
+
 # WingTune
 
 > Desktop-first (Tauri 2.x) + hosted-demo blackbox log analysis tool for the
