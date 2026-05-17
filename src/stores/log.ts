@@ -12,6 +12,7 @@ import {
   type ScanReport,
   type SourceHandle,
 } from '../lib/wasmBridge';
+import { DEFAULT_FIELD_CACHE_BYTES } from './view';
 
 export const useLogStore = defineStore('log', () => {
   const client = new ParserClient();
@@ -42,8 +43,20 @@ export const useLogStore = defineStore('log', () => {
 
   // Hydrated fields keyed by name. `shallowReactive` so add/remove triggers
   // reactivity without deep-wrapping the typed arrays themselves.
+  //
+  // Eviction policy: Map preserves insertion order, so iterating
+  // forward yields oldest-hydrated first. When cumulative cached
+  // bytes exceed the cap (`view.fieldCacheBytesCap`), evict from the
+  // front, SKIPPING entries listed in `pinnedFields` (those are
+  // hot-set fields that recommenders re-need every render and are
+  // pre-hydrated eagerly at log load — evicting them would cause
+  // thrashing). This is write-order LRU (insertion timestamps only,
+  // no read-on-access tracking) — simpler than maintaining a
+  // touch-on-read counter, and sufficient because the panel/recommender
+  // usage pattern is "hydrate once when shown, read many times."
   const fields = shallowReactive<Map<string, Float32Array>>(new Map());
   const hydrating = shallowReactive<Set<string>>(new Set());
+  const pinnedFields = new Set<string>();
 
   const events = shallowRef<EventFrame[]>([]);
 
@@ -69,6 +82,7 @@ export const useLogStore = defineStore('log', () => {
     gpsTimeSec.value = new Float32Array(0);
     fields.clear();
     hydrating.clear();
+    pinnedFields.clear();
     events.value = [];
     firmwareRevision.value = null;
     firmwareDate.value = null;
@@ -77,6 +91,40 @@ export const useLogStore = defineStore('log', () => {
     fileName.value = null;
     fileSize.value = null;
     parseTimeMs.value = null;
+  }
+
+  /** Mark these field names as never-evict. Recommender-required fields
+   *  are pinned at log load (by AnalysisView) so the LRU pass can't
+   *  thrash them. */
+  function pinFields(names: readonly string[]) {
+    for (const n of names) pinnedFields.add(n);
+  }
+
+  /** Total bytes currently held in the field cache. Float32Array
+   *  byteLength is 4 × length — exact memory footprint. */
+  function totalCachedBytes(): number {
+    let total = 0;
+    for (const arr of fields.values()) total += arr.byteLength;
+    return total;
+  }
+
+  /** If the field cache is over the cap, evict from insertion order
+   *  (oldest hydrations first), skipping pinned entries. Called after
+   *  each successful hydrate; cheap because the eviction sweep
+   *  short-circuits as soon as we're under the cap. */
+  function maybeEvict(capBytes: number = DEFAULT_FIELD_CACHE_BYTES): void {
+    if (totalCachedBytes() <= capBytes) return;
+    for (const name of fields.keys()) {
+      if (pinnedFields.has(name)) continue;
+      fields.delete(name);
+      if (totalCachedBytes() <= capBytes) return;
+    }
+    // All non-pinned entries evicted and we're still over cap → the
+    // pinned set alone exceeds the cap. Don't evict pinned items;
+    // accept the overage. (Surface to telemetry someday; for now,
+    // not loud — a 256 MB pinned set means the recommender's
+    // ALL_RECOMMENDER_REQUIRED_FIELDS is on a 60 MB+ log, which is
+    // both unusual and out of our reach to fix here.)
   }
 
   /** Empirical scan throughput baseline. Calibrated against btfl_002 +
@@ -161,6 +209,9 @@ export const useLogStore = defineStore('log', () => {
       if (hydrated.gpsTimesSec.length > 0) {
         gpsTimeSec.value = hydrated.gpsTimesSec;
       }
+      // Sweep eviction after every successful hydrate. Cheap (short-
+      // circuits as soon as we're under the cap) and idempotent.
+      maybeEvict();
     } finally {
       for (const n of missing) hydrating.delete(n);
     }
@@ -187,5 +238,6 @@ export const useLogStore = defineStore('log', () => {
     ensureFields,
     reset,
     setScanError,
+    pinFields,
   };
 });

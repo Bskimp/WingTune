@@ -56,6 +56,11 @@ watch(
     const present = new Set(report.capability.fields_present);
     const wanted = ALL_RECOMMENDER_REQUIRED_FIELDS.filter((f) => present.has(f));
     if (wanted.length > 0) {
+      // Pin recommender-required fields BEFORE hydrating so the LRU
+      // sweep that runs at end of hydrate doesn't evict them. The pin
+      // set is also cleared by logStore.reset() on each new load, so
+      // pinning across logs is safe.
+      logStore.pinFields(wanted);
       logStore.ensureFields(wanted).catch(() => {
         // Hydration failures are surfaced by the store; recs
         // that needed those fields just won't emit. No-op here.
