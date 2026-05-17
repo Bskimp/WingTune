@@ -13,6 +13,11 @@
 import type { Capability } from '@/lib/capabilityPredicates';
 import type { Recommendation, Recommender } from '@/lib/recommendations';
 
+/** This recommender doesn't read hydrated fields — its criteria are
+ *  pure metadata (capability + currentMode). Empty list keeps the
+ *  registry-wide union shape simple. */
+export const debugModeRequiredFields: readonly string[] = [];
+
 interface RecSpec {
   mode: string;
   moduleLabel: string;

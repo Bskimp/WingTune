@@ -16,7 +16,14 @@
 import type { CapabilityReport } from '@/lib/wasmBridge';
 import type { ConfidenceLevel } from '@/lib/confidence';
 import type { ModuleReport } from '@/lib/capabilityPredicates';
-import { debugModeRecommender } from '@/lib/recommenders/debugMode';
+import {
+  debugModeRecommender,
+  debugModeRequiredFields,
+} from '@/lib/recommenders/debugMode';
+import {
+  pidfsSharesRecommender,
+  pidfsSharesRequiredFields,
+} from '@/lib/recommenders/pidfsShares';
 
 /** UI severity — the "should I care" axis, distinct from confidence
  *  (the "is this rec trustworthy" axis). A high-severity low-
@@ -66,14 +73,31 @@ export interface Recommendation {
 export interface RecommenderArgs {
   capability: CapabilityReport;
   modules: ModuleReport;
+  /** Hydrated field map (logStore.fields). Recommenders that need
+   *  per-frame data look fields up by name (e.g. `axisP[0]`). Maps
+   *  shallow-reactive — Vue's computed re-runs when entries are
+   *  added, so PIDFS recs appear once the eager-hydration kick from
+   *  AnalysisView completes. Fields a recommender NEEDS but that
+   *  aren't hydrated yet → the recommender skips them, returns no
+   *  recs from that axis. */
+  fields: ReadonlyMap<string, Float32Array>;
 }
 
 export type Recommender = (args: RecommenderArgs) => Recommendation[];
 
+/** Union of every field every registered recommender wants hydrated
+ *  before it runs. AnalysisView eagerly hydrates this set on log
+ *  load so PIDFS recs land without lazy-on-tab-mount delay. */
+export const ALL_RECOMMENDER_REQUIRED_FIELDS: readonly string[] = [
+  ...debugModeRequiredFields,
+  ...pidfsSharesRequiredFields,
+];
+
 export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
   const recs: Recommendation[] = [];
   for (const rec of debugModeRecommender(args)) recs.push(rec);
-  // future: pidfsShareImbalance, dynamicNotchCoverage, filterDelayBudget,
+  for (const rec of pidfsSharesRecommender(args)) recs.push(rec);
+  // future: dynamicNotchCoverage, filterDelayBudget,
   // stepResponseOvershoot, servoSaturation, … each just appended here.
   return recs;
 }

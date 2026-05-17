@@ -16,13 +16,17 @@ import { gatherRecommendations, type Severity } from '@/lib/recommendations';
 import RecommendList from '@/components/analysis/RecommendList.vue';
 
 const logStore = useLogStore();
-const { scanReport } = storeToRefs(logStore);
+const { scanReport, fields } = storeToRefs(logStore);
 
 const recs = computed(() => {
   const r = scanReport.value;
   if (!r) return [];
   const modules = evaluateModules(r.capability);
-  return gatherRecommendations({ capability: r.capability, modules });
+  return gatherRecommendations({
+    capability: r.capability,
+    modules,
+    fields: fields.value,
+  });
 });
 
 const counts = computed(() => {
