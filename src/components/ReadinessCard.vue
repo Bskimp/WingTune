@@ -110,6 +110,14 @@ function toneClass(tone: 'ok' | 'warn' | 'stamp' | 'dim'): string {
     case 'dim':   return 'text-bp-dim border-bp-dim';
   }
 }
+
+function viaLabel(via: 'main_frame' | 'debug' | 'mixed'): string {
+  switch (via) {
+    case 'main_frame': return 'main-frame fields';
+    case 'debug':      return 'debug mode';
+    case 'mixed':      return 'mixed sources';
+  }
+}
 </script>
 
 <template>
@@ -156,7 +164,7 @@ function toneClass(tone: 'ok' | 'warn' | 'stamp' | 'dim'): string {
             <span
               v-if="row.capability.via"
               class="font-mono text-[10px] text-bp-ink-3"
-            >via {{ row.capability.via }}</span>
+            >via {{ viaLabel(row.capability.via) }}</span>
             <span
               class="font-sans text-[9px] tracking-[0.2em] uppercase font-bold ml-auto"
               :class="colorFor(row.capability.state)"

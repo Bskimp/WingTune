@@ -24,6 +24,7 @@
 // coming.
 
 import type { CapabilityReport, SampleCheck } from '@/lib/wasmBridge';
+import { resolveSignal, type Axis } from '@/lib/signalRegistry';
 
 // ---- type contracts (skill-spec'd) -------------------------------------
 
@@ -134,35 +135,147 @@ export function checkPidfsDecomp(
   return { state: 'available' };
 }
 
-// ---- registry-pending stubs --------------------------------------------
+// ---- multi-source predicates (signal-registry-routed) ------------------
 //
-// These predicates route multi-source signals (main-frame vs debug-mode
-// fallback) through src/lib/signalRegistry.ts. The registry isn't built
-// yet; shipping these as `blocked` with an honest "registry-pending"
-// reason keeps the readiness UI showing the full module list so users
-// see what's coming.
+// These call resolveSignal() rather than naming a debug_mode string or
+// main-frame field directly — the load-bearing invariant of the
+// capability layer. When BF 2026.6 lands (or a partial PR), only
+// signalRegistry.ts changes; predicate code stays put.
+//
+// `combineVia` rolls two/three signal resolutions into a single
+// `via` for the Capability return — if all signals resolved through
+// the same source, that's the via; otherwise it's `mixed`.
 
-function registryPending(module: string): Capability {
-  return {
-    state: 'blocked',
-    reason: `${module} predicate pending — needs signal registry (lib/signalRegistry.ts) for main-frame vs debug-mode source abstraction`,
-  };
+function combineVia(
+  vias: ReadonlyArray<'main_frame' | 'debug'>,
+): 'main_frame' | 'debug' | 'mixed' {
+  if (vias.length === 0) return 'main_frame';
+  const first = vias[0];
+  return vias.every((v) => v === first) ? first : 'mixed';
 }
 
-export function checkAirspeedAutoTune(_: CapabilityReport): Capability {
-  return registryPending('airspeed auto-tune');
+/** TPA curve fit derives the applied TPA factor from the ratio of
+ *  post-TPA setpoint over pre-TPA setpoint per axis. Needs the
+ *  WING_SETPOINT debug-mode pair (pre_tpa_setpoint + adjusted_setpoint)
+ *  on at least one axis. BF does not log `tpaFactor` as a discrete
+ *  field — it's internal `pidRuntime.tpaFactor`. */
+export function checkTpaCurveFit(capability: CapabilityReport): Capability {
+  // Check all three axes; available if any axis resolves both signals.
+  const axisChecks = ([0, 1, 2] as const).map((axis) => {
+    const pre  = resolveSignal('pre_tpa_setpoint', axis, capability);
+    const adj  = resolveSignal('adjusted_setpoint', axis, capability);
+    return { axis, pre, adj };
+  });
+  const anyAvailable = axisChecks.some(
+    (c) => c.pre.state === 'resolved' && c.adj.state === 'resolved',
+  );
+  if (!anyAvailable) {
+    return {
+      state: 'blocked',
+      reason: 'set `debug_mode = WING_SETPOINT` in BF to log pre-/post-TPA setpoint per axis',
+    };
+  }
+  const anyMissing = axisChecks.some(
+    (c) => c.pre.state === 'missing' || c.adj.state === 'missing',
+  );
+  // Pick a `via` from any resolved channel — all WING_SETPOINT channels
+  // come from the same source, so they agree.
+  const firstResolved = axisChecks.find(
+    (c) => c.pre.state === 'resolved' && c.adj.state === 'resolved',
+  )!;
+  const via = firstResolved.pre.state === 'resolved' ? firstResolved.pre.via : undefined;
+  if (anyMissing) {
+    return {
+      state: 'partial',
+      reason: 'WING_SETPOINT resolves on some axes but not all — set `debug_mode = WING_SETPOINT` in BF and re-fly to cover every axis',
+      via,
+    };
+  }
+  return { state: 'available', via };
 }
 
-export function checkTpaCurveFit(_: CapabilityReport): Capability {
-  return registryPending('TPA curve fit');
+/** Airspeed auto-tune reads the firmware's own airspeed estimate
+ *  logged via DEBUG_TPA (PR #13895). Requires `debug_mode = TPA`
+ *  AND `gps_use_3d_speed = ON` in the BF config; we can verify the
+ *  debug mode but the gps_use_3d_speed CLI flag isn't in the scan
+ *  report, so we surface a GPS-present check as a proxy. */
+export function checkAirspeedAutoTune(capability: CapabilityReport): Capability {
+  const speed = resolveSignal('tpa_speed_est', null, capability);
+  if (speed.state === 'missing') {
+    return {
+      state: 'blocked',
+      reason: 'set `debug_mode = TPA` in BF to log the airspeed estimate',
+    };
+  }
+  if (!capability.gps_present) {
+    return {
+      state: 'blocked',
+      reason: 'GPS not present — also requires `set gps_use_3d_speed = ON` in BF for the estimate to be meaningful',
+    };
+  }
+  if (speed.state === 'inactive') {
+    return {
+      state: 'inactive',
+      reason: 'airspeed estimate channel logged but always zero — check `gps_use_3d_speed = ON` in BF',
+      via: speed.via,
+    };
+  }
+  return { state: 'available', via: speed.via };
 }
 
-export function checkSpaEffectiveness(_axis: 0 | 1 | 2, _: CapabilityReport): Capability {
-  return registryPending('SPA effectiveness');
+/** Per-axis SPA effectiveness needs the spa multiplier trace for the
+ *  requested axis. Debug-mode-only signal (no main-frame source). */
+export function checkSpaEffectiveness(axis: Axis, capability: CapabilityReport): Capability {
+  const spa = resolveSignal('spa', axis, capability);
+  if (spa.state === 'missing') {
+    const ax = ['roll', 'pitch', 'yaw'][axis];
+    return {
+      state: 'blocked',
+      reason: `set \`debug_mode = SPA\` in BF to log per-axis SPA multiplier (need ${ax} channel populated)`,
+    };
+  }
+  if (spa.state === 'inactive') {
+    const ax = ['roll', 'pitch', 'yaw'][axis];
+    return {
+      state: 'inactive',
+      reason: `SPA on ${ax} logged but always zero — SPA disabled for this axis`,
+      via: spa.via,
+    };
+  }
+  return { state: 'available', via: spa.via };
 }
 
-export function checkSTermTpaViz(_axis: 0 | 1 | 2, _: CapabilityReport): Capability {
-  return registryPending('S-term TPA viz');
+/** Per-axis S-term TPA visualization compares the pre-TPA S contribution
+ *  to the post-TPA `axisS[i]`. Post-TPA is single-source main-frame
+ *  USE_WING; pre-TPA is debug-mode-only via S_TERM. Needs both. */
+export function checkSTermTpaViz(axis: Axis, capability: CapabilityReport): Capability {
+  const ax = ['roll', 'pitch', 'yaw'][axis];
+
+  // post-TPA s-term: single-source (axisS is main-frame USE_WING only)
+  const post = presenceOf(`axisS[${axis}]`, capability);
+  if (post === 'missing') {
+    return {
+      state: 'blocked',
+      reason: `post-TPA S-term \`axisS[${axis}]\` not logged — needed for the ${ax} comparison view (USE_WING build required)`,
+    };
+  }
+
+  // pre-TPA s-term: debug-only via S_TERM mode
+  const pre = resolveSignal('pre_tpa_s', axis, capability);
+  if (pre.state === 'missing') {
+    return {
+      state: 'blocked',
+      reason: `set \`debug_mode = S_TERM\` in BF to log pre-/post-TPA S-term per axis (need ${ax} channel populated)`,
+    };
+  }
+  if (post === 'zero' || pre.state === 'inactive') {
+    return {
+      state: 'inactive',
+      reason: `${ax} S-term traces logged but always zero — S gain disabled for this axis`,
+      via: pre.via,
+    };
+  }
+  return { state: 'available', via: pre.via };
 }
 
 // ---- aggregator --------------------------------------------------------
