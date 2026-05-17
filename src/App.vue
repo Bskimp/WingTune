@@ -15,7 +15,7 @@ import { ParserClient } from '@/lib/wasmBridge';
 import { useLogStore } from '@/stores/log';
 import AppHeader from '@/components/AppHeader.vue';
 import FileDropZone from '@/components/FileDropZone.vue';
-import CapabilitySummary from '@/components/CapabilitySummary.vue';
+import AnalysisView from '@/views/AnalysisView.vue';
 
 const wasmReady = ref(false);
 const wasmError = ref<string | null>(null);
@@ -46,7 +46,7 @@ onMounted(async () => {
       </div>
 
       <div class="mt-5">
-        <CapabilitySummary v-if="hasLog" />
+        <AnalysisView v-if="hasLog" />
         <FileDropZone v-else />
       </div>
     </div>
