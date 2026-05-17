@@ -256,12 +256,35 @@ all deferred (need calibration flights with the right debug modes).
   channel index wasn't pinned during the M5 recon pass. Wrong
   channel index would surface garbage as "resolved" output.
 - Step-response settling-metric refinement vs PIDscope: shape
-  character matches PIDtoolbox now (commit `d6781fc`) but amplitude
-  still inflated (peak ~335% vs PIDtoolbox ~130% on btfl_002).
-  Held on PIDscope's log loader — wasn't loading on Brian's
-  machine 2026-05-17. Knobs to dial when PIDscope is available:
-  tighten tail-QC band to `[0.7, 1.5]`, bump segmentLen to 8192
-  (2 s at 4 kHz), or raise peak gate to 80 deg/s.
+  character matches PIDtoolbox after the three fixes in `d6781fc`
+  but amplitude still inflated. **2026-05-17 follow-up:** Brian got
+  PIDscope working locally and did a three-tool side-by-side on
+  btfl_002 (PIDscope / PIDtoolbox / WingTune). Findings:
+    · Reference tools both report Roll Peak ≈ 1.3 (with latencies
+      ~11–18 ms) despite their displayed CURVES looking very
+      different. PIDscope's roll curve visually clips at the
+      y-max of 1.75 (so the actual visible peak is > 1.75) while
+      reporting Peak = 1.3 in the metric box. **So the "peak"
+      metric both reference tools report is NOT max(response).**
+    · WingTune's `peakAmplitude = max(response)` is reporting a
+      fundamentally different quantity (335% on this log) — we've
+      been comparing apples to oranges across all the previous
+      calibration work.
+    · PIDscope keeping n=9 segments with a clean curve while
+      WingTune's n=13 produces noisy oscillation tells us the
+      averaging / normalisation differs too — segment count
+      alone isn't the culprit.
+  PIDscope source is GPL-3 and lives locally at
+  `C:\Users\Sista\Desktop\PIDscope-main` (use that vs fork for
+  reference reads). Next step: extract PSstepcalc.m's actual
+  peak-metric formula (probably first-peak-relative-to-steady-state
+  or a windowed-peak rather than chart max), then either replace
+  WingTune's `peakAmplitude = max(response)` with the same
+  formula (apples-to-apples) OR ship both metrics side by side
+  ("raw peak" + "reference peak") so the user can correlate
+  against either tool. Knobs already on the dial list — QC
+  band `[0.7, 1.5]`, segmentLen 8192 (2 s @ 4 kHz), peak gate
+  80 deg/s — are secondary; metric-definition mismatch dominates.
 - M1.0 corpus assembly track (not started).
 - M1.7 multi-log + session persistence (not started — ~2-3 weeks).
 - Real Rust scan-progress callback. The estimated bar in
