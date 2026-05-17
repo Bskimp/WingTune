@@ -275,16 +275,47 @@ all deferred (need calibration flights with the right debug modes).
       averaging / normalisation differs too — segment count
       alone isn't the culprit.
   PIDscope source is GPL-3 and lives locally at
-  `C:\Users\Sista\Desktop\PIDscope-main` (use that vs fork for
-  reference reads). Next step: extract PSstepcalc.m's actual
-  peak-metric formula (probably first-peak-relative-to-steady-state
-  or a windowed-peak rather than chart max), then either replace
-  WingTune's `peakAmplitude = max(response)` with the same
-  formula (apples-to-apples) OR ship both metrics side by side
-  ("raw peak" + "reference peak") so the user can correlate
-  against either tool. Knobs already on the dial list — QC
-  band `[0.7, 1.5]`, segmentLen 8192 (2 s @ 4 kHz), peak gate
-  80 deg/s — are secondary; metric-definition mismatch dominates.
+  `C:\Users\Sista\Desktop\PIDscope-main`. Metric formulas
+  extracted via research agent against that local copy
+  (`src/plot/PStuningParams.m:74-76` + `:149-151`):
+
+  ```
+  peak    = max(mean_response WITHIN first 150 ms after t=0)
+            # NOT global max — the chart shows 0-500 ms but the
+            # metric only sees the first 150 ms. That's why
+            # PIDscope's curve can visually clip at 1.75 while
+            # reporting Peak = 1.3 in the metric box.
+  latency = time when mean_response first crosses 0.5
+            # from t=0 of the impulse (50% of unit-step target,
+            # not 50% of realized peak).
+  ```
+
+  **Critical quad-vs-wing caveat:** the 150 ms peak window is
+  hardcoded for quad dynamics (~30-80 ms settling). Wings have
+  200-500 ms response, so adopting the formula verbatim would
+  report the early *rising shoulder* as "peak" rather than the
+  actual overshoot. A wing-scaled window would be ~500-800 ms,
+  OR derive from the response's own settling time.
+
+  **Decision: held — gather more data before changing the metric.**
+  Brian wants to run multiple newer logs back-to-back through
+  PIDscope + PIDtoolbox + Blackbox Log Explorer + WingTune and
+  compare side-by-side before committing to a metric definition
+  change. One log + three tools is too thin to choose a window
+  size that holds across the wing-tuning regime. Knobs still on
+  the dial list — QC band `[0.7, 1.5]`, segmentLen 8192 (2 s @
+  4 kHz), peak gate 80 deg/s — remain secondary.
+
+  Proposed implementation when ready (~30 min):
+    · Replace `peakAmplitude = max(response)` with
+      `max(response[0..PEAK_WINDOW_SAMPLES])`, default
+      `PEAK_WINDOW_MS = 400` (middle of wing-response range).
+    · Replace `settlingTimeMs` (first cross of 0.95 × finalValue)
+      with `latencyMs = first time response[i] > 0.5`; gate
+      with `max(response within window) < 0.5 → NaN`.
+    · Update StepResponsePanel header label `settle 95%` →
+      `latency 50%`. Cross-check expected: btfl_002 should drop
+      from peak 335% toward 1.3-2.0 range.
 - M1.0 corpus assembly track (not started).
 - M1.7 multi-log + session persistence (not started — ~2-3 weeks).
 - Real Rust scan-progress callback. The estimated bar in
