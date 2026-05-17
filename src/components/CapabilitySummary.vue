@@ -14,6 +14,7 @@ import FlightStrip from '@/components/FlightStrip.vue';
 import FieldTable from '@/components/FieldTable.vue';
 import DataDivider from '@/components/DataDivider.vue';
 import ConfidenceStamp from '@/components/ConfidenceStamp.vue';
+import ReadinessCard from '@/components/ReadinessCard.vue';
 
 const logStore = useLogStore();
 const { scanReport, firmwareRevision, boardInfo, events } = storeToRefs(logStore);
@@ -81,6 +82,10 @@ const eventCount = computed(() => events.value.length);
 <template>
   <section>
     <FlightStrip />
+
+    <div class="mt-5">
+      <ReadinessCard />
+    </div>
 
     <DataDivider :title="`SCAN CAPABILITY · ${capCards.length} ITEMS`" class="mt-5 mb-2.5">
       <template #right>
