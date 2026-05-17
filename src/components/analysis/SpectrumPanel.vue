@@ -59,7 +59,7 @@ type DisplayMode = 'filt' | 'raw' | 'both';
 
 const MODE_CHIPS: Array<{ key: DisplayMode; label: string; title: string }> = [
   { key: 'filt', label: 'filt', title: 'Filtered gyro only (gyroADC main-frame)' },
-  { key: 'raw',  label: 'raw',  title: 'Raw gyro only (debug_mode = GYRO_RAW)' },
+  { key: 'raw',  label: 'raw',  title: 'Raw gyro only (gyroUnfilt main-frame, or DEBUG_GYRO_RAW)' },
   { key: 'both', label: 'both', title: 'Filtered (solid) + raw (dashed) overlaid' },
 ];
 
@@ -78,17 +78,20 @@ const delayBudget = computed<FilterDelayBudget | null>(() => {
   return computeDelayBudget(fc);
 });
 
-// Resolve gyro_raw per axis through the signal registry. Returns the
-// debug[N] field name when DEBUG_GYRO_RAW is active, else null. The
-// registry handles the source choice — if BF ever exposes a main-
-// frame pre-filter gyro field, only signalRegistry.ts changes.
+// Resolve gyro_raw per axis through the signal registry. Returns
+// the hydratable main-frame field name — `gyroUnfilt[N]` when the
+// Blackbox "Gyro (Unfiltered)" toggle was on, else `debug[N]` when
+// `debug_mode = GYRO_RAW` is the source. The registry hides which
+// path resolved; the panel just hydrates whatever it gets back.
 const rawGyroFieldNames = computed<(string | null)[]>(() => {
   const sr = scanReport.value;
   if (!sr) return [null, null, null];
   return ([0, 1, 2] as Axis[]).map((axis) => {
     const r = resolveSignal('gyro_raw', axis, sr.capability);
-    if (r.state !== 'resolved' || r.source.kind !== 'debug') return null;
-    return `debug[${r.source.channel}]`;
+    if (r.state !== 'resolved') return null;
+    return r.source.kind === 'main_frame'
+      ? r.source.field
+      : `debug[${r.source.channel}]`;
   });
 });
 
@@ -471,7 +474,7 @@ const pendingMessage = computed(() => {
 const rawMissingHint = computed(() => {
   if (displayMode.value === 'filt') return null;
   if (rawGyroAvailable.value) return null;
-  return 'raw gyro not in this log — set `debug_mode = GYRO_RAW` in BF to log pre-filter gyro for comparison';
+  return 'raw gyro not in this log — enable Blackbox `Gyro (Unfiltered)` (preferred) or set `debug_mode = GYRO_RAW` to log pre-filter gyro for comparison';
 });
 
 const segmentInfo = computed(() => {

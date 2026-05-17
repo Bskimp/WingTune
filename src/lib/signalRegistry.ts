@@ -132,14 +132,27 @@ export const SIGNALS: Record<string, SignalDef> = {
     ],
   },
 
-  // Pre-filter gyro per axis. Channels 0/1/2 = roll/pitch/yaw raw
-  // sensor reading before BF's filter chain. Used by the Spectrum tab
-  // to overlay pre- vs post-filter gyro so the user can see exactly
-  // what the filter chain is removing. Debug-mode-only via GYRO_RAW.
+  // Pre-filter gyro per axis. Used by the Spectrum tab to overlay
+  // pre- vs post-filter gyro so the user can see exactly what the
+  // filter chain is removing.
+  //
+  // Source preference: main-frame `gyroUnfilt[axis]` first, debug
+  // fallback second. The Blackbox "Gyro (Unfiltered)" toggle is
+  // independent of `debug_mode`, so when it's on we get raw gyro as
+  // a proper main-frame field and `debug_mode` stays free for
+  // whatever wing-tuning module the flight is targeting (TPA / SPA /
+  // S_TERM / WING_SETPOINT). DEBUG_GYRO_RAW remains as fallback for
+  // older logs.
+  //
+  // BF naming caveat: the logged `gyroADC[]` is FILTERED despite
+  // the name (it's fed from `gyro.gyroADCf[]` per BF's write code in
+  // docs/firmware-pr/wing-fields-firmware.patch:168-169), and
+  // `gyroUnfilt[]` is the truly unfiltered raw sensor reading.
   gyro_raw: {
     id: 'gyro_raw',
     perAxis: true,
     sources: (axis) => [
+      { kind: 'main_frame', field: `gyroUnfilt[${axis}]` },
       { kind: 'debug', mode: 'GYRO_RAW', channel: axis as number },
     ],
   },
