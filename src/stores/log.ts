@@ -39,6 +39,14 @@ export const useLogStore = defineStore('log', () => {
   const boardInfo = ref<string | null>(null);
   const craftName = ref<string | null>(null);
 
+  // Source-file metadata the entry-page flight strip renders. `fileName`
+  // is the raw `File.name`; `fileSize` is in bytes. `parseTimeMs` is the
+  // wall-clock duration of the most recent `scan()` call — surfaced as
+  // "parse 824 ms" in the flight strip.
+  const fileName = ref<string | null>(null);
+  const fileSize = ref<number | null>(null);
+  const parseTimeMs = ref<number | null>(null);
+
   function reset() {
     scanReport.value = null;
     scanError.value = null;
@@ -50,14 +58,23 @@ export const useLogStore = defineStore('log', () => {
     firmwareDate.value = null;
     boardInfo.value = null;
     craftName.value = null;
+    fileName.value = null;
+    fileSize.value = null;
+    parseTimeMs.value = null;
   }
 
   async function loadFile(input: File | string): Promise<void> {
     reset();
     scanning.value = true;
+    if (typeof input !== 'string') {
+      fileName.value = input.name;
+      fileSize.value = input.size;
+    }
     try {
       const handle: SourceHandle = await client.openSource(input);
+      const startedAt = performance.now();
       const report = await client.scan(handle);
+      parseTimeMs.value = performance.now() - startedAt;
       scanReport.value = report;
       time.value = report.time_sec;
       events.value = report.events;
@@ -104,6 +121,9 @@ export const useLogStore = defineStore('log', () => {
     firmwareDate,
     boardInfo,
     craftName,
+    fileName,
+    fileSize,
+    parseTimeMs,
     loadFile,
     ensureFields,
     reset,

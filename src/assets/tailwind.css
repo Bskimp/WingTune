@@ -1,1 +1,35 @@
 @import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * WingTune design tokens — Direction C · Hangar Logbook · Blueprint palette.
+ * Locked 2026-05-16. Reference: docs/design-reference/ + memory entry
+ * `project-direction-c-blueprint`. Anti-pattern: don't add more palettes
+ * here without updating the memory entry; if Blueprint ever turns out
+ * wrong in real use, swap the values inline rather than running another
+ * design pass.
+ *
+ * Fonts: we declare IBM Plex Serif / Inter / IBM Plex Mono with deep
+ * fallbacks so the app reads correctly even when those fonts aren't
+ * installed. Self-hosting vs Google Fonts vs system-only is deferred —
+ * the fallbacks (Georgia / system-ui / ui-monospace) are visually close
+ * enough for dev. */
+@theme {
+  --color-bp-bg:          #0a1729;
+  --color-bp-surface:     #11223a;
+  --color-bp-surface-2:   #162b48;
+  --color-bp-line:        #1f3a5a;
+  --color-bp-line-2:      #2b4d72;
+  --color-bp-ink:         #eaf2ff;
+  --color-bp-ink-2:       #b6c7e0;
+  --color-bp-ink-3:       #7a90b0;
+  --color-bp-dim:         #4a5e7e;
+  --color-bp-accent:      #7ec8ff;
+  --color-bp-accent-dim:  #4880ad;
+  --color-bp-stamp:       #ff8a7a;
+  --color-bp-ok:          #6ed3a0;
+  --color-bp-warn:        #ffc46a;
+
+  --font-slab: 'IBM Plex Serif', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}

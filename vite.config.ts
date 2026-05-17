@@ -1,3 +1,5 @@
+import { fileURLToPath, URL } from 'node:url';
+
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import wasm from 'vite-plugin-wasm';
@@ -12,6 +14,11 @@ import tailwindcss from '@tailwindcss/vite';
 // If we ever target older browsers, re-evaluate.
 export default defineConfig({
   plugins: [vue(), wasm(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   worker: {
     format: 'es',
   },
