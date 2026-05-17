@@ -96,6 +96,13 @@ export interface ScanReport {
   board_info: string | null;
   craft_name: string | null;
   filter_config: FilterConfig;
+  /** All BBL header key/value pairs as raw strings (PID values, rates,
+   *  mixer config, filter cutoffs, etc.). Sorted alphabetically by key
+   *  on the Rust side via BTreeMap, so the UI can render directly.
+   *  Includes keys that `filter_config` already typed — exposed raw so
+   *  the inspector shows every CLI param BF wrote, not just the ones
+   *  we recognise. */
+  header_params: Record<string, string>;
 }
 
 /** Pre-conversion shape of `ScanReport` as it comes out of

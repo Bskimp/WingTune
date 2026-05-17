@@ -17,7 +17,19 @@ pub use event::EventFrame;
 pub use hydrate::{hydrate as hydrate_impl, HydrateError, HydrateResult};
 pub use scan::{scan, ScanError, ScanReport};
 
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
+
+/// serde-wasm-bindgen's default `to_value` serializes Rust maps to
+/// JS `Map` objects, not plain JS objects. That breaks consumer code
+/// that does `obj[key]` lookup or `Object.entries(obj)` iteration
+/// (which is the canonical JS access pattern). Force the JSON-
+/// compatible "maps as objects" output for all our serialized
+/// payloads — every map in our types is keyed by string and meant to
+/// be accessed as a record.
+fn js_serializer() -> serde_wasm_bindgen::Serializer {
+    serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true)
+}
 
 /// One-line description of the underlying parser. Retained from the M1.1
 /// smoke as a diagnostic endpoint — the real scan/hydrate surface is below.
@@ -33,10 +45,11 @@ pub fn parser_info() -> String {
 /// both are marshalled to plain JS objects via `serde-wasm-bindgen`.
 #[wasm_bindgen(js_name = scanLog)]
 pub fn scan_log(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let ser = js_serializer();
     match scan::scan(bytes) {
-        Ok(report) => serde_wasm_bindgen::to_value(&report)
+        Ok(report) => report.serialize(&ser)
             .map_err(|e| JsValue::from_str(&format!("serialize ScanReport: {e}"))),
-        Err(err) => Err(serde_wasm_bindgen::to_value(&err)
+        Err(err) => Err(err.serialize(&ser)
             .unwrap_or_else(|_| JsValue::from_str("scan: unserializable error"))),
     }
 }
@@ -48,10 +61,11 @@ pub fn scan_log(bytes: &[u8]) -> Result<JsValue, JsValue> {
 /// boundary.
 #[wasm_bindgen(js_name = hydrate)]
 pub fn hydrate(bytes: &[u8], field_ids: Vec<String>) -> Result<JsValue, JsValue> {
+    let ser = js_serializer();
     match hydrate::hydrate(bytes, &field_ids) {
-        Ok(result) => serde_wasm_bindgen::to_value(&result)
+        Ok(result) => result.serialize(&ser)
             .map_err(|e| JsValue::from_str(&format!("serialize hydrate: {e}"))),
-        Err(err) => Err(serde_wasm_bindgen::to_value(&err)
+        Err(err) => Err(err.serialize(&ser)
             .unwrap_or_else(|_| JsValue::from_str("hydrate: unserializable error"))),
     }
 }
@@ -236,6 +250,7 @@ mod tests {
             board_info: None,
             craft_name: None,
             filter_config: FilterConfig::default(),
+            header_params: std::collections::BTreeMap::new(),
         };
         let json = serde_json::to_string(&report).expect("serialize");
         let back: ScanReport = serde_json::from_str(&json).expect("deserialize");

@@ -47,6 +47,13 @@ pub struct ScanReport {
     /// header's free-form text. Empty fields when the log's BF version
     /// uses different key names or the filter is OFF.
     pub filter_config: FilterConfig,
+    /// All free-form header key/value pairs (PID values, rates, mixer
+    /// config, filter cutoffs, etc.) BTreeMap-sorted by key so the
+    /// browser-side dump renders deterministically. Includes the keys
+    /// that `filter_config` already typed — exposed raw so the
+    /// inspector can show the user every CLI param BF wrote into the
+    /// log, including unknown ones we don't typify.
+    pub header_params: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +89,11 @@ pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
         .map(|(k, v)| (*k, *v))
         .collect();
     let filter_config = parse_filter_config(&unknown_std);
+    // BTreeMap so the JS-side renders alphabetical without sorting.
+    let header_params: BTreeMap<String, String> = unknown_std
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
 
     let mut fields_present: Vec<String> = headers
         .main_frame_def()
@@ -194,6 +206,7 @@ pub fn scan(bytes: &[u8]) -> Result<ScanReport, ScanError> {
         board_info,
         craft_name,
         filter_config,
+        header_params,
     })
 }
 

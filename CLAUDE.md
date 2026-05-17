@@ -127,11 +127,20 @@ filter analysis + spectrum recommenders landed.
 
 **In flight / pending:**
 
-- M3 visual validation on a clean wing calibration flight — LOG00113
-  has 0 satellites (no lock); btfl_002 has GPS lock but is mostly
-  ground/hand-held so the fit can't recover sane params. Need a real
-  sustained-cruise log with throttle variation + ideally attitude[1]
-  + DEBUG_TPA for firmware cross-check.
+- **M3 + M4 visual validation flight (held)** — Need calibration
+  flights to fully validate:
+    · M3 (BASIC airspeed fit): a sustained-cruise wing flight with
+      throttle variation + GPS lock the whole flight + ideally
+      `debug_mode = TPA` for firmware-estimator cross-check + ideally
+      `attitude[1]` in the main frame (some BF builds skip the AHRS
+      estimator).
+    · M4 (pre/post-filter overlay): a flight with
+      `debug_mode = GYRO_RAW` (separate flight from the TPA one since
+      BF logs one debug mode per flight).
+  Current logs (LOG00113, btfl_002) don't satisfy any of these — the
+  fit + overlay surfaces are correctly emitting blocked/missing
+  states. This is a "go fly" task, not a code task. Flagged so it
+  doesn't get lost.
 - Pitch sign convention vs BF firmware (currently `−g·sin(pitch)`
   assuming BF nose-up positive). Verify against firmware source when
   M5 work begins.

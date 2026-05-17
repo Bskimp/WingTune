@@ -12,6 +12,7 @@ import { storeToRefs } from 'pinia';
 import { useLogStore } from '@/stores/log';
 import FlightStrip from '@/components/FlightStrip.vue';
 import FieldTable from '@/components/FieldTable.vue';
+import HeaderParamsPanel from '@/components/HeaderParamsPanel.vue';
 import DataDivider from '@/components/DataDivider.vue';
 import ConfidenceStamp from '@/components/ConfidenceStamp.vue';
 import ReadinessCard from '@/components/ReadinessCard.vue';
@@ -157,6 +158,10 @@ const eventCount = computed(() => events.value.length);
 
     <div class="mt-5">
       <FieldTable />
+    </div>
+
+    <div class="mt-5">
+      <HeaderParamsPanel />
     </div>
   </section>
 </template>
