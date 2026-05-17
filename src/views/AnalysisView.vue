@@ -36,6 +36,7 @@ import TrackingTab from '@/components/analysis/TrackingTab.vue';
 import ServosTab from '@/components/analysis/ServosTab.vue';
 import AirspeedPanel from '@/components/analysis/AirspeedPanel.vue';
 import SpectrumPanel from '@/components/analysis/SpectrumPanel.vue';
+import StepResponsePanel from '@/components/analysis/StepResponsePanel.vue';
 import RecommendTab from '@/components/analysis/RecommendTab.vue';
 import TabPlaceholder from '@/components/analysis/TabPlaceholder.vue';
 import CapabilitySummary from '@/components/CapabilitySummary.vue';
@@ -77,12 +78,7 @@ watch(
       <ServosTab v-else-if="activeTab === 'servos'" />
       <AirspeedPanel v-else-if="activeTab === 'airspeed'" />
       <SpectrumPanel v-else-if="activeTab === 'spectrum'" />
-      <TabPlaceholder
-        v-else-if="activeTab === 'step'"
-        tab="Step response"
-        milestone="M2 (PIDFS decomp) + M-step (closed-loop deconv)"
-        blurb="Per-axis peak / latency scatters across detected setpoint steps. Needs the step-window detector and the frequency-domain deconvolution primitives — neither is in M1 scope."
-      />
+      <StepResponsePanel v-else-if="activeTab === 'step'" />
       <RecommendTab v-else-if="activeTab === 'recommend'" />
     </div>
   </div>
