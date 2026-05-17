@@ -19,7 +19,7 @@ import IconUpload from '@/components/icons/IconUpload.vue';
 import IconFile from '@/components/icons/IconFile.vue';
 
 const logStore = useLogStore();
-const { scanning, scanError, fileName, fileSize } = storeToRefs(logStore);
+const { scanning, scanError, scanProgress, fileName, fileSize } = storeToRefs(logStore);
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const isDragging = ref(false);
@@ -240,20 +240,23 @@ function dismissError() {
               {{ fileName ?? 'log' }}
             </div>
             <div class="font-sans text-[11px] text-bp-ink-3 mt-0.5">
-              Decoding — streaming progress lands later, holding pattern for now
+              Decoding · estimated progress (real % needs Rust callback wiring)
             </div>
           </div>
-          <div class="font-mono text-[14px] text-bp-accent">
-            …{{ sizeLabel }}
+          <div class="font-mono text-[14px] text-bp-accent tabular-nums">
+            {{ scanProgress.toFixed(0) }}% · {{ sizeLabel }}
           </div>
         </div>
-        <!-- indeterminate striped bar -->
+        <!-- determinate bar bound to scanProgress (0..100) -->
         <div
           class="relative h-2 bg-bp-surface-2 border border-bp-line-2 overflow-hidden"
         >
           <div
-            class="absolute inset-y-0 left-0 w-full wt-stripe-anim"
-            style="background: repeating-linear-gradient(135deg, var(--color-bp-accent) 0 4px, var(--color-bp-accent-dim) 4px 8px);"
+            class="absolute inset-y-0 left-0 wt-stripe-anim transition-[width] duration-100 ease-linear"
+            :style="{
+              width: scanProgress + '%',
+              background: 'repeating-linear-gradient(135deg, var(--color-bp-accent) 0 4px, var(--color-bp-accent-dim) 4px 8px)',
+            }"
           />
         </div>
       </div>
