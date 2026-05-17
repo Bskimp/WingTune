@@ -7,57 +7,93 @@
 
 ## Status
 
-Design docs locked through v0.9 (roadmap) / rev 11 (M1 execution).
+Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
+M1 functionally complete (corpus track aside); M2 emission loop
+landed.
 
 **Done:**
 
-- M1.0 parser-support track: firmware-version fix + speculative
-  `WING_LAUNCH` YAML landed on `Bskimp/blackbox-log:wing-support`
-  (commits `bdb0eb5` → `a07ff76` → `0e66887`). Brian's real wing logs
-  (`btfl_001.bbl`, etc.) now decode end-to-end through the WingTune
-  parser. Upstream PR drafted, not yet opened (Brian's call). See
-  `project-parser-scratch-test-result` + `project-brian-wing-launch-debug-mode`.
+- M1.0 parser-support track: firmware-version fix + `WING_LAUNCH`
+  YAML + (added later) `TPA` / `S_TERM` / `SPA` / `WING_SETPOINT`
+  debug-mode YAML entries for BF 2026.6, all on
+  `Bskimp/blackbox-log:wing-support` (latest commit `4dd54b5`).
+  Brian's real wing logs decode end-to-end through the WingTune
+  parser. Upstream PR drafted, not yet opened (Brian's call).
+  Corpus assembly track still not started.
 - M1.1 scaffold: Cargo workspace + `crates/wingtune-parser` (WASM via
   wasm-bindgen + wasm-pack) + `crates/validate-parser`, Vite 8 + Vue 3.5
   + TS 6 + Pinia 3 + Tailwind 4 frontend, Layer 1 worker + wasmBridge,
   Tauri 2.11 desktop shell, vitest + WASM-binding tests, GitHub Actions
-  CI (ubuntu rust/js + windows tauri-check), `.devcontainer/`.
-- M1.2 WASM wrapper + Worker: typed `ScanReport` / `CapabilityReport` /
-  `EventFrame` / `ScanError` shapes both Rust- and TS-side; real
-  `scan(bytes)` impl returning capability + Float32 time axis + events;
-  worker dispatches `scan` / `hydrate` / `info` requests with an ok/error
-  envelope; `ParserClient` class in `wasmBridge.ts` is the only Layer 1
-  import surface for Layer 2/3.
-- M1.3.1-3 (non-UI half): `src/lib/dtype.ts` helpers
-  (`concatFloat32`, `secondsFromMicros`, `float32ArrayBytes`); Float32
-  conversion at the wasmBridge boundary; real Rust `hydrate(bytes,
-  field_ids)` impl with `MainValue → f32` for Unsigned/Signed/Voltage/
-  Amperage/Acceleration/Rotation; worker caches log bytes after scan
-  so hydrate doesn't re-transfer; `useLogStore()` and `useViewStore()`
-  Pinia stores following `shallowRef`/`shallowReactive` discipline.
-  Real-log integration verified: `btfl_001.bbl` → 134307 frames, 64
-  fields, hydrate returns `axisP[0]=9, axisP[1]=-4` at the first sample.
+  CI, `.devcontainer/`.
+- M1.2 WASM wrapper + Worker: typed `ScanReport` / `CapabilityReport`
+  shapes both sides; real `scan(bytes)` + `hydrate(bytes, fields)`;
+  `ParserClient` is the only Layer 1 surface for Layer 2/3.
+- M1.3 entry-page surface: `src/lib/dtype.ts` helpers (incl.
+  `nearestTimeIndex` binary search); Float32 conversion at the
+  wasmBridge boundary; lazy hydration via `useLogStore().ensureFields`;
+  `useLogStore()` + `useViewStore()` Pinia stores following
+  shallowRef/shallowReactive discipline; M1.3.4-5 file drop +
+  CapabilitySummary + ReadinessCard (latter from M1.6) all wired
+  against real logs; happy-dom-backed integration test
+  (`tests/wasm-binding/entry-flow.test.ts`) exercises drop → store →
+  CapabilitySummary against `LOG00113.BFL`.
+- M1.4 charts + tabs: tab shell (Summary / Tracking / Servos /
+  Spectrum / Step / [Recommend when populated]) driven by
+  `useViewStore().activeTab`; shared cursor (cursorTime, cursorPinned,
+  pin actions, hover-clear) wired across panels; TimeBar (click-to-pin)
+  + CursorReadout (aggregate per-panel sample rows via
+  `useCursorSamples` + hint tooltips); `useUPlot` lifecycle composable
+  + `useChartPinnedCursor` for cross-chart overlay. Two real chart
+  panels shipped: `SetpointTrackingPanel` (gyro vs setpoint per axis,
+  RMS/peak error stats, drag-to-zoom, axis selector) and `ServoPanel`
+  (multi-trace servo[i] + motor[i] with per-channel toggle, dead-
+  channel range filter). Spectrum + Step render `TabPlaceholder` honest
+  "module pending" surfaces until their analytics ship.
+- M1.6 readiness report: `src/lib/confidence.ts` (ConfidenceLevel,
+  ConfidenceResult<T>, aggregateConfidence per skill-spec'd rule),
+  `src/lib/capabilityPredicates.ts` (ModuleReport + per-module
+  predicates with three-state field presence handling),
+  `src/lib/signalRegistry.ts` (multi-source signal abstraction
+  grounded in merged BF PRs #13895 / #13719 / #14010 — predicates
+  call `resolveSignal()` instead of naming debug_mode strings),
+  `ReadinessCard.vue` rendering the 12-module slot list at the top
+  of the Summary tab with four-state icons + standardized
+  "set `debug_mode = X` in BF to log ..." reason language.
+- M2 emission loop (slices 1 + 2): `lib/pidfs.ts` (meanAbs +
+  pidfsShares), `PIDContributionPanel.vue` (per-axis P/I/D/F/S traces
+  + mean-abs share strip + dominant-term indicator + chip toggle
+  with shift-click solo), `lib/recommendations.ts`
+  (Recommendation shape + sortBySeverity + gatherRecommendations
+  aggregator), `lib/recommenders/debugMode.ts` (first concrete
+  recommender — emits green-confidence "set debug_mode = X" CLI
+  recs when readiness shows a wing-tuning module blocked by missing
+  debug data), Recommend tab UI (RecommendCard with copy-removed-on-
+  red gate, RecommendList severity-sorted, RecommendTab header with
+  must/should/could/ok score breakdown). TabBar auto-shows the
+  Recommend tab when rec count > 0.
 
 **In flight / pending:**
 
-- **M1.3.4-5 paused for a Claude Design pass.** Everything except the
-  visual surfaces is built. The Pinia stores are populated with real
-  reactive state from `btfl_001.bbl` when `useLogStore().loadFile(file)`
-  is called — design can prototype against actual data shapes in dev
-  tools instead of TypeScript type defs. Components owned by the
-  design pass: `FileDropZone.vue`, `CapabilitySummary.vue`, App.vue
-  restructure. Also pending: scan progress streaming UX, LRU eviction
-  policy, Tauri `openSource(path)` command.
 - M1.0 corpus assembly track (not started).
-- Upstream `blackbox-log` PR open (held by Brian).
-- M1.1.4 / M1.1.5 / M1.2 in-browser / desktop runtime smoke (compile +
-  partial Vite-serve smoke green; full UI smoke pending a non-remote-control session).
+- M1.5 log inspector: partially covered by Summary tab's
+  FieldTable + ReadinessCard. A deeper CLI-parameter-dump browser
+  is the gap.
+- M1.7 multi-log + alignment (not started).
+- Scan-progress streaming UX (indeterminate striped bar today;
+  real % needs Layer 1 worker progress messages).
+- LRU eviction policy on hydrated-field cache (constant only today).
+- Tauri-side `openSource(path)` command + native file picker.
+- Upstream `blackbox-log` PR (held by Brian).
+- Pinned-cursor evidence-chip wiring on RecommendCard (rec
+  emission shape supports it; UI deferred to slice 3).
 
-**Immediate next step when resuming code work:** M1.3.4 — file drop +
-capability summary components, informed by the design pass. Store API
-is already in place at `src/stores/log.ts` (`loadFile`, `ensureFields`,
-`scanning`, `scanError`, `scanReport`, `time`, `fields`, `events`,
-`firmwareRevision`, etc.).
+**Immediate next step when resuming code work:** Brian's call —
+candidates are M3 (airspeed/TPA fit using DEBUG_TPA signal),
+deeper M2 recs (e.g. PIDFS share-imbalance detection), M5 (TPA
+curve fit using WING_SETPOINT pre/post pair), Tauri shell wire-up,
+or scan-progress streaming. The chart + cursor + rec infrastructure
+is in place — pick a module, write its analytics, plug recs into
+the existing recommender registry.
 
 ## Cardinal rules
 
