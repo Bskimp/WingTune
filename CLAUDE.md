@@ -345,22 +345,33 @@ all deferred (need calibration flights with the right debug modes).
       `latency 50%`. Cross-check expected: btfl_002 should drop
       from peak 335% toward 1.3-2.0 range.
 - M1.0 corpus assembly track (not started).
-- M1.7 multi-log + session persistence (not started — ~2-3 weeks).
-- Real Rust scan-progress callback. The estimated bar in
-  FileDropZone (commit `ed9acb1`) is interim — animation against
-  expected duration, not actual byte-level progress. True progress
-  needs a Rust callback threaded through the scan loop +
-  `&js_sys::Function` plumbing in `scanLog` + worker postMessage
-  forwarding + bridge progress callback + store update. ~1-2 hour
-  slice.
+- M1.7 multi-log compare (not started — ~1 week). Scope reduced
+  from "multi-log + session persistence" 2026-05-17: persistence
+  dropped. Tuning sessions are one-shot (drop log, analyse, fly
+  again) — re-opening the same log next session is rare, the
+  recommender CLI text is already pastable, and OS-level "recent
+  files" covers the marginal case. Multi-log compare alone has
+  real value (A/B before/after a tune change, cross-flight PIDFS
+  share trends, spectrum overlay across filter changes); that's
+  the M1.7 scope going forward.
 - Upstream `blackbox-log` PR (held by Brian).
 
+**Explicitly out of scope (won't build):**
+- **Live FC connection / MSP / serial.** WingTune is a log analyzer,
+  not a configurator. No reason to plug an FC into the app —
+  configuration belongs in BF Configurator, telemetry belongs in
+  the OSD or a separate live tool. Bench-FC dumps for things like
+  KNOWN_PRESETS come via copy-paste from the CLI, not a serial
+  link from WingTune.
+
 **Immediate next step when resuming code work:** Brian's call. The
-wing analytics suite is complete; remaining concrete code items are
-the real Rust scan-progress callback (~1-2 h) or M1.7 multi-log
-(~2-3 weeks). Everything else either needs flight data, is held on
-Brian's call (upstream PR), or is a polish lift. The chart + cursor
-+ recommender + capability infrastructure is well-trodden — adding
+wing analytics suite is complete and the real Rust scan-progress
+callback shipped (commit `9759d0c`). The one remaining concrete
+code item that isn't flight-blocked or held-on-Brian is M1.7
+multi-log compare (~1 week, reduced scope — see pending list).
+Everything else either needs flight data, is held on Brian's call
+(upstream PR), or is a polish lift. The chart + cursor +
+recommender + capability infrastructure is well-trodden — adding
 a new analytics module follows the established pattern.
 
 ## Cardinal rules

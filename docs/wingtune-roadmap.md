@@ -52,7 +52,7 @@
 **Still pending in code:**
 
 - M1.0 corpus assembly track (not started).
-- M1.7 multi-log + session persistence (not started).
+- M1.7 multi-log compare (not started — persistence dropped, see M1.7 section).
 - Real Rust scan-progress callback (interim estimated bar shipped; true byte-level progress needs Rust callback threading + WASM rebuild + worker plumbing).
 - Step-response settling-metric calibration vs PIDscope (shape character matches PIDtoolbox; amplitude calibration held on PIDscope's log loader).
 - Verify `tpa_factor` is DEBUG_TPA channel 2 (signal-registry TODO).
@@ -186,18 +186,21 @@ Load a log, scrub through traces. Header inspector. Readiness report. No analysi
 
 Runtime "what can WingTune do with this log" view using capability predicates.
 
-### M1.7 — Multi-log + session persistence *(~2–3 weeks)*
+### M1.7 — Multi-log compare *(~1 week)*
 
-Multi-log support and named-session save/load. **Not a separate "campaign" UI** — earlier revs scoped this as a dedicated compare surface, but every concrete need is better expressed as additive features on existing surfaces plus a persistence layer:
+Multi-log support as additive features on existing surfaces. **Not a separate "campaign" UI** and **not a persistence layer** — earlier revs scoped this as a dedicated compare surface plus session save/load; both got dropped:
+
+- **2026-05-17 scope cut**: session persistence removed from M1.7. Tuning sessions are one-shot — you drop a log, analyse for 20-30 min, fly again. Re-opening the same log next session is rare; the recommender CLI text is already pastable; OS-level "recent files" covers the marginal case. Persistence would mean IndexedDB + cache-invalidation logic (file mtime, parser version, schema) + storage budget + edge cases (corrupt cache, partial restore, multi-tab) — engineering for a workflow that doesn't really exist in tuning. Multi-log compare on its own is where the actual value lives.
+
+What lands:
 
 - **Multi-log in the time-series view**: drop a second `.bbl` while a log is loaded → overlaid in paired colors, same scrub window.
 - **Log picker** in the time-series toolbar when N ≥ 3 (per-log show/hide; hidden at N ≤ 2).
 - **Time alignment toggle** with three modes: `absolute`, `first-arm`, `first-mode-change`. Event-track markers shift with alignment. The X-axis transform is the bulk of M1.7 implementation cost — not a one-line toggle.
 - **Tuning diff side panel** opens from any view when ≥ 2 logs are loaded. Shows a curated set (~30 main tuning parameters — P/I/D/F/S per axis, TPA mode/curve/speed, SPA mode/center/width per axis, rates, filter cutoffs) with diffs highlighted. **Not** a 200-row dump of every header field; the full matrix is post-M7 backlog ("Tuning history matrix").
-- **Session save/load**: a session is a named bundle (list of loaded logs + active workspace + alignment mode), serialized as `<name>.session.json`. Tauri writes to disk; web persists to IndexedDB + prompts user to re-drop logs on reload.
 - **Unioned readiness**: when N ≥ 2 logs are loaded, the readiness report renders per-module coverage across logs ("M3 runnable on 2 of 3 logs; via debug on flight 1, via main-frame on flight 2"). Single-log rendering unchanged at N = 1.
 
-No dedicated `CompareView.vue` or `/compare` route. No modal shift between "log mode" and "campaign mode" — logs just exist, optionally bundled into a named session.
+No dedicated `CompareView.vue` or `/compare` route. No session-save/load. Logs just exist alongside each other while the app is open.
 
 ### M2 — PIDFS quick decomposition *(~2–3 weeks)*
 
@@ -228,8 +231,11 @@ Pre/post-TPA S-term overlay from `debug_mode = S_TERM` logs.
 - **Tuning history matrix** — sortable, scannable table of `parameter × flight` covering the full ~200-row header set (not just the M1.7 diff panel's curated ~30). Lets a tuner scan a 5-flight progression and see "p_roll climbed 38 → 42 → 46 → 46 → 44, d_roll stayed at 23 the whole time." Deferred deliberately: build this *after* M1 has been used on a real tuning sequence, when the right column/row controls become obvious from use — design-by-imagination before that is wasted work.
 - **Coupled-axis diagnostics** — adverse yaw, roll-yaw cross-coupling, pitch-airspeed coupling.
 - **Differential thrust analysis** — for wing setups using yaw via differential thrust.
-- **Live MSP telemetry** (PIDscope-equivalent) — real-time view during bench testing.
 - **Public hosted corpus** — shareable anonymized logs for community-wide regression testing.
+
+**Explicitly out of scope (not a future module — won't build):**
+
+- **Live FC connection / MSP / serial / live telemetry.** WingTune is a log analyzer, not a configurator. Configuration belongs in BF Configurator; live telemetry belongs in the OSD or a dedicated bench tool. Anything that requires plugging an FC directly into WingTune (live PID viewers, on-the-fly tune push, live MSP scopes) is deliberately not on the roadmap. Bench-FC outputs we *do* consume (CLI dumps for KNOWN_PRESETS, header param tables) come via copy-paste, not a serial link.
 
 ## Tech stack decisions
 
@@ -290,7 +296,7 @@ Methodological:
 
 Operational:
 
-9. **Debug-mode exclusivity forces multi-flight tuning sequences (pre-PR).** Mitigation: source-agnostic signal registry resolves whichever path is present; M1.7 multi-log + session-persistence features let the user keep N flights loaded with unioned readiness; M1.6 readiness report shows what's resolvable and via which path; per-module prerequisites view guides the next flight if a signal is missing; firmware companion PR eliminates most exclusivity for 2026.6+ without invalidating pre-PR logs.
+9. **Debug-mode exclusivity forces multi-flight tuning sequences (pre-PR).** Mitigation: source-agnostic signal registry resolves whichever path is present; M1.7 multi-log compare lets the user keep N flights loaded with unioned readiness; M1.6 readiness report shows what's resolvable and via which path; per-module prerequisites view guides the next flight if a signal is missing; firmware companion PR eliminates most exclusivity for 2026.6+ without invalidating pre-PR logs.
 10. **Some modules still need a specific debug_mode pre-PR.** Mitigation: M1.6 readiness report flags; per-module prerequisites view shows required CLI commands; falls away per-signal as the firmware PR (or its split variants) lands. Predicate code itself does not need to change when 2026.6 ships.
 11. **Bin populations may be sparse.** Mitigation: clear "insufficient samples" messaging per bin.
 
@@ -315,7 +321,7 @@ Distribution:
 - Devcontainer config? *(Lean: yes — dual toolchain plus Vite version churn make it more valuable than usual.)*
 - Hosted demo + Tauri? *(Resolved v0.6: both. Static demo for "try it" sharing, Tauri for serious work.)*
 - Signing certs for Tauri? *(Defer to v1 release time.)*
-- Whether to bundle a sample *session* (multi-log set + saved view state) for first-run UX. *(Lean: yes once M1.7 lands — shows the multi-log + diff-panel features off without requiring the user to load three files manually.)*
+- Whether to bundle a sample *multi-log set* (2-3 paired logs) for first-run UX. *(Lean: yes once M1.7 lands — shows the compare + diff-panel features off without requiring the user to load three files manually. Sample set is loaded fresh each session; no persisted view state since persistence got dropped from M1.7.)*
 
 ## Firmware companion work
 
