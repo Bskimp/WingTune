@@ -559,6 +559,7 @@ the table below is for human navigation.
 | `wingtune-corpus-hygiene`     | Any change touching `tests/corpus/` or a `.bbl` file                 | GPS scrubbing, public/private split, no escape hatch      |
 | `wingtune-confidence-scoring` | New analysis module, capability predicates, readiness report changes | Two-layer trust model, green/yellow/red                   |
 | `wingtune-vue-conventions`    | Any `.vue`, store, or composable change                              | Vue 3 + setup-style Pinia + Tailwind discipline           |
+| `wingtune-recommender`        | New recommender, RecommendCard edits, CLI-emission path changes      | Safety invariants for the only "tool tells user what to do" surface |
 
 Each skill includes a "Quick self-check before committing" section that
 serves as a built-in review checklist.
