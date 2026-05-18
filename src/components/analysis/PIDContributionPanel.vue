@@ -57,11 +57,66 @@ const TERM_SPECS: TermSpec[] = [
   { term: 'S', color: '#ffc46a', hint: 'Static / saturation gain (PIDFS)' },
 ];
 
+// Reference traces — what the PID loop is chasing (setpoint, the
+// target) and responding to (gyro, the actual). Overlaid on a
+// secondary deg/s y-axis so the PID-term scale doesn't get squashed
+// by gyro's larger magnitude. Phase delay reads off the
+// setpoint-to-gyro time-shift directly; tracking error reads off
+// their separation.
+type ReferenceId = 'setpoint' | 'gyro';
+type ReferenceSpec = {
+  id: ReferenceId;
+  short: string;
+  field: (axis: AxisId) => string;
+  color: string;
+  hint: string;
+  /** Cursor-readout tone closest to the chart stroke. */
+  tone: CursorSample['tone'];
+  /** Optional uPlot dash pattern `[dashPx, gapPx]`. Setpoint is
+   *  dotted to read as "the commanded value" — the convention
+   *  every reference scope (PIDtoolbox, PIDscope, BBL Explorer)
+   *  uses for the same reason. */
+  dash?: number[];
+};
+const REFERENCE_SPECS: ReferenceSpec[] = [
+  {
+    id: 'setpoint',
+    short: 'set',
+    field: (a) => `setpoint[${a}]`,
+    color: '#eef4ff',
+    hint: 'Setpoint · what the PIDs are chasing (deg/s)',
+    tone: 'ink',
+    dash: [2, 4],
+  },
+  {
+    id: 'gyro',
+    short: 'gyr',
+    field: (a) => `gyroADC[${a}]`,
+    // Magenta-violet — deliberately outside the PID color family
+    // (P-blue / I-ink / D-coral / F-mint / S-amber) so the "actual
+    // measurement that the loop is reacting to" reads as its own
+    // visual category, not just another PID-adjacent trace.
+    color: '#d97bc8',
+    hint: 'Gyro · the actual rate the PIDs are reacting to (deg/s)',
+    tone: 'stamp',
+  },
+];
+
 const COLORS = {
   ink3:  '#7a90b0',
   line:  '#1f3a5a',
   dim:   '#4a5e7e',
 } as const;
+
+/** Symmetric-around-zero range for both y-scales. Used so the PID
+ *  (left) and deg/s (right) zero lines land on the same y-pixel,
+ *  which is the whole point of overlaying reference traces on PID
+ *  contributions — phase/shape comparison reads cleanly only if
+ *  the baselines align. */
+function symmetric(min: number, max: number): [number, number] {
+  const abs = Math.max(Math.abs(min), Math.abs(max)) || 1;
+  return [-abs, abs];
+}
 
 const selectedAxis = ref<AxisId>(0);
 const axisSpec = computed(() => AXES[selectedAxis.value]);
@@ -69,17 +124,26 @@ const axisSpec = computed(() => AXES[selectedAxis.value]);
 const logStore = useLogStore();
 const view = useViewStore();
 const { time, fields, hydrating } = storeToRefs(logStore);
+// hiddenSeries must be destructured BEFORE the opts computed below,
+// because opts reads isHidden() (axes[2].show), and any sync read of
+// opts.value during setup would TDZ on hiddenSeries otherwise.
+const { hiddenSeries } = storeToRefs(view);
 
 const fieldNameFor = (term: PIDFSTerm, axis: AxisId) => `axis${term}[${axis}]`;
 
-const requestedFieldNames = computed(() =>
-  TERM_SPECS.map((t) => fieldNameFor(t.term, selectedAxis.value)),
-);
+const requestedFieldNames = computed(() => [
+  ...TERM_SPECS.map((t) => fieldNameFor(t.term, selectedAxis.value)),
+  ...REFERENCE_SPECS.map((r) => r.field(selectedAxis.value)),
+]);
 
 async function hydrateForAxis(id: AxisId) {
   // ensureFields tolerates missing-in-log entries (they come back empty);
-  // we just request the full PIDFS quintet and surface whichever lands.
-  await logStore.ensureFields(TERM_SPECS.map((t) => fieldNameFor(t.term, id)));
+  // we just request the full PIDFS quintet + the two reference traces
+  // and surface whichever lands.
+  await logStore.ensureFields([
+    ...TERM_SPECS.map((t) => fieldNameFor(t.term, id)),
+    ...REFERENCE_SPECS.map((r) => r.field(id)),
+  ]);
 }
 
 onMounted(() => hydrateForAxis(selectedAxis.value));
@@ -99,10 +163,28 @@ const present = computed<Record<PIDFSTerm, boolean>>(() => {
 
 const presentTerms = computed(() => TERM_SPECS.filter((t) => present.value[t.term]));
 
+const presentRefs = computed(() =>
+  REFERENCE_SPECS.filter((r) => {
+    const arr = fields.value.get(r.field(selectedAxis.value));
+    return arr && arr.length > 0;
+  }),
+);
+
 const termArrays = computed<PIDFSArrays>(() => {
   const out: PIDFSArrays = {};
   for (const t of presentTerms.value) {
     out[t.term] = fields.value.get(fieldNameFor(t.term, selectedAxis.value));
+  }
+  return out;
+});
+
+const refArrays = computed<Record<ReferenceId, Float32Array | undefined>>(() => {
+  const out: Record<ReferenceId, Float32Array | undefined> = {
+    setpoint: undefined,
+    gyro: undefined,
+  };
+  for (const r of presentRefs.value) {
+    out[r.id] = fields.value.get(r.field(selectedAxis.value));
   }
   return out;
 });
@@ -121,8 +203,9 @@ const data = computed<AlignedData>(() => {
   if (!ready.value) {
     return [new Float32Array(0)] as unknown as AlignedData;
   }
-  const arrs = presentTerms.value.map((t) => termArrays.value[t.term]!);
-  return [time.value, ...arrs] as unknown as AlignedData;
+  const termArrs = presentTerms.value.map((t) => termArrays.value[t.term]!);
+  const refArrs  = presentRefs.value.map((r) => refArrays.value[r.id]!);
+  return [time.value, ...termArrs, ...refArrs] as unknown as AlignedData;
 });
 
 const opts = computed<Options>(() => {
@@ -133,6 +216,15 @@ const opts = computed<Options>(() => {
       stroke: t.color,
       width:  1.1,
     })),
+    ...presentRefs.value.map((r) => ({
+      label:  r.short,
+      stroke: r.color,
+      width:  1.1,
+      // Secondary y-axis scale so deg/s magnitudes don't squash the
+      // PID-term y-axis on the left.
+      scale:  'degs',
+      ...(r.dash ? { dash: r.dash } : {}),
+    })),
   ];
   return {
     width: 600,
@@ -140,7 +232,15 @@ const opts = computed<Options>(() => {
     legend: { show: false },
     scales: {
       x: { time: false },
-      y: { auto: true },
+      // Both y-scales force-symmetric around zero so the zero line on
+      // the PID scale (left) and the deg/s scale (right) render at the
+      // same y-pixel. Without this, uPlot auto-fits each scale to its
+      // own data range, the two zeros drift apart, and the gyro vs PID
+      // shape comparison reads as a vertical offset that isn't really
+      // there. Padding stays implicit in `Math.max(...) || 1` so an
+      // all-zero range doesn't collapse to [0, 0].
+      y:    { auto: true, range: (_u, min, max) => symmetric(min, max) },
+      degs: { auto: true, range: (_u, min, max) => symmetric(min, max) },
     },
     cursor: {
       drag: { x: true, y: false, uni: 50 },
@@ -163,6 +263,19 @@ const opts = computed<Options>(() => {
         // Must match TimeBar's PLOT_AXIS_LEFT_PX so the time-bar cursor
         // visually aligns with this chart's cursor at the same time t.
         size:   50,
+      },
+      {
+        // Secondary right-side axis for setpoint/gyro reference traces
+        // (deg/s). Dimmer stroke so it doesn't compete with the
+        // primary PID axis on the left. Hidden when no ref is visible.
+        scale:  'degs',
+        side:   1,
+        stroke: COLORS.dim,
+        grid:   { show: false },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        size:   42,
+        show:   presentRefs.value.some((r) => !isHidden(r.id)),
       },
     ],
     hooks: {
@@ -192,17 +305,28 @@ const { pinnedPx } = useChartPinnedCursor({ plot, host: hostRef });
 // field name (axisP[0] etc.), so different axes / panels don't
 // collide. Survives tab switches.
 
-const { hiddenSeries } = storeToRefs(view);
+// Shared visibility key for both PID terms (axisP[0] etc.) and the
+// reference traces (setpoint[0], gyroADC[0]). One Set, one helper —
+// the keys are field names so they don't collide across panels or
+// axes.
+function fieldKeyFor(id: PIDFSTerm | ReferenceId): string {
+  if (id === 'setpoint' || id === 'gyro') {
+    const r = REFERENCE_SPECS.find((s) => s.id === id)!;
+    return r.field(selectedAxis.value);
+  }
+  return fieldNameFor(id, selectedAxis.value);
+}
 
-function isHidden(term: PIDFSTerm): boolean {
-  return hiddenSeries.value.has(fieldNameFor(term, selectedAxis.value));
+function isHidden(id: PIDFSTerm | ReferenceId): boolean {
+  return hiddenSeries.value.has(fieldKeyFor(id));
 }
 
 function onChipClick(term: PIDFSTerm, ev: MouseEvent) {
   const myField = fieldNameFor(term, selectedAxis.value);
   if (ev.shiftKey) {
     // Solo: hide every present term except this one. If we're already
-    // soloed on this term, restore all.
+    // soloed on this term, restore all. Refs are unaffected by solo —
+    // they're a separate visual layer.
     const otherFields = presentTerms.value
       .filter((t) => t.term !== term)
       .map((t) => fieldNameFor(t.term, selectedAxis.value));
@@ -223,12 +347,22 @@ function onChipClick(term: PIDFSTerm, ev: MouseEvent) {
   }
 }
 
+function onRefChipClick(id: ReferenceId) {
+  // Refs don't participate in shift-solo — they're reference overlays,
+  // not PIDFS contributors. Simple click-to-toggle.
+  view.toggleSeries(fieldKeyFor(id));
+}
+
 function syncSeriesVisibility() {
   const u = plot.instance();
   if (!u) return;
-  presentTerms.value.forEach((t, i) => {
-    u.setSeries(i + 1, { show: !isHidden(t.term) });
-  });
+  let seriesIdx = 1;
+  for (const t of presentTerms.value) {
+    u.setSeries(seriesIdx++, { show: !isHidden(t.term) });
+  }
+  for (const r of presentRefs.value) {
+    u.setSeries(seriesIdx++, { show: !isHidden(r.id) });
+  }
 }
 
 watch(plot.ready, (isReady) => { if (isReady) syncSeriesVisibility(); }, { immediate: true });
@@ -274,14 +408,23 @@ const liveSamples = computed<CursorSample[]>(() => {
   const idx = nearestTimeIndex(time.value, cursorTime.value);
   if (idx === null) return [];
   const ax = axisSpec.value.label;
-  return presentTerms.value
+  const termRows = presentTerms.value
     .filter((t) => !isHidden(t.term))
-    .map((t) => ({
+    .map<CursorSample>((t) => ({
       label: `${t.term}${axisSpec.value.short}`,
       value: (termArrays.value[t.term]![idx] as number).toFixed(0),
       tone: TERM_TONE[t.term],
       hint: `${t.term}-term · ${ax} — ${t.hint}`,
     }));
+  const refRows = presentRefs.value
+    .filter((r) => !isHidden(r.id))
+    .map<CursorSample>((r) => ({
+      label: `${r.short}${axisSpec.value.short}`,
+      value: (refArrays.value[r.id]![idx] as number).toFixed(0),
+      tone: r.tone,
+      hint: `${ax} — ${r.hint}`,
+    }));
+  return [...termRows, ...refRows];
 });
 useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
 </script>
@@ -319,6 +462,35 @@ useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
               :style="{ background: isHidden(t.term) ? 'var(--color-bp-line-2)' : t.color }"
             />
             {{ t.term }}
+          </button>
+        </div>
+
+        <div
+          v-if="presentRefs.length > 0"
+          class="w-px h-4 bg-bp-line-2"
+          aria-hidden="true"
+        />
+
+        <div v-if="presentRefs.length > 0" class="flex gap-1 items-center">
+          <button
+            v-for="r in presentRefs"
+            :key="r.id"
+            type="button"
+            class="flex items-center gap-1.5 px-2 py-[3px] font-mono text-[11px] font-semibold border cursor-pointer transition-colors"
+            :style="{
+              background: isHidden(r.id) ? 'transparent' : `${r.color}1f`,
+              borderColor: isHidden(r.id) ? 'var(--color-bp-line-2)' : r.color,
+              color: isHidden(r.id) ? 'var(--color-bp-ink-3)' : r.color,
+            }"
+            :title="r.hint + (isHidden(r.id) ? ' · hidden' : '')"
+            :aria-pressed="!isHidden(r.id)"
+            @click="onRefChipClick(r.id)"
+          >
+            <span
+              class="inline-block w-2.5 h-0.5"
+              :style="{ background: isHidden(r.id) ? 'var(--color-bp-line-2)' : r.color }"
+            />
+            {{ r.short }}
           </button>
         </div>
 
