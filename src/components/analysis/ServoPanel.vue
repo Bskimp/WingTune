@@ -13,11 +13,16 @@
 // channel) — the multi-log mass-toggle path would need a per-channel
 // chip per log which gets unmanageable for 8 servos × 3 logs.
 //
-// Time axis caveat: all logs are plotted against the first (active)
-// log's time axis by sample index. For same-rate same-plane
-// comparison flights (Brian's primary use case — see corpus) this
-// aligns naturally. Mismatched sample rates or wall-clock alignment
-// is M1.7.1 work via `useAlignedTime`.
+// Time axis: chart x is SESSION time (`log.time[i] + log.timeOffsetSec`).
+// Each log's data array is resampled onto the reference x using
+// nearest-sample lookup against its own aligned time, so a non-zero
+// `timeOffsetSec` visibly shifts that log's traces left/right relative
+// to the others (M1.7.1 — drag the ⟷ on a roster chip to set offsets).
+// The active log's cursor readout projects `view.cursorTime` (session
+// time) back to the active log's local axis via `useAlignedTime`.
+// Assumes uniform sample rate per log (BF logs are uniform); if a
+// non-uniform log ever shows up we'll need to swap the O(1) index
+// math for a binary search.
 //
 // Labels:
 //   · `servo[N]` → "Servo N · unknown" (or classified role + confidence
@@ -34,6 +39,7 @@ import type { AlignedData, Options, Series } from 'uplot';
 
 import { useSessionStore, type LogState } from '@/stores/session';
 import { useActiveLog } from '@/composables/useActiveLog';
+import { useAlignedTime } from '@/composables/useAlignedTime';
 import type { ScanReport } from '@/lib/wasmBridge';
 import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
@@ -325,14 +331,77 @@ const allTraces = computed<LogChannelTrace[]>(() => {
   return out;
 });
 
-/** Longest time axis among visible logs (used as the chart x). Shorter
- *  logs' channel data gets NaN-padded past their end so uPlot doesn't
- *  draw a wrap. */
-const refTime = computed<Float32Array>(() => {
-  let best = activeLog.time.value;
-  for (const { log } of visibleEntries.value) {
-    if (log.time.length > best.length) best = log.time;
+/** Per-log aligned time: `log.time[i] + log.timeOffsetSec`. Returns
+ *  the original Float32Array when offset is 0 (the typical case) so
+ *  we share storage instead of allocating. When offset != 0 we use
+ *  Float64 — Float32 round-trip otherwise introduces ~1e-8 epsilons
+ *  that flip the sign of edge-sample bounds checks in
+ *  `resampleOntoRef`, which at certain offsets cascades into uPlot
+ *  rendering an empty y-axis (no valid samples to auto-scale to). */
+function alignedTimeFor(log: LogState): Float32Array | Float64Array {
+  if (log.timeOffsetSec === 0) return log.time;
+  const t = log.time;
+  const off = log.timeOffsetSec;
+  const out = new Float64Array(t.length);
+  for (let i = 0; i < t.length; i++) out[i] = t[i] + off;
+  return out;
+}
+
+/** Resample `valueArr` (indexed by `log.time`) onto session-time
+ *  positions in `ref`. Uses uniform-rate index math for O(1) per
+ *  sample. Out-of-range positions become NaN so uPlot skips them.
+ *  Tolerates a half-sample eps on the t0/tLast bounds (Float32
+ *  precision in `log.time` can place edge samples a few nanoseconds
+ *  off their ideal value). */
+function resampleOntoRef(
+  log: LogState,
+  ref: Float32Array | Float64Array,
+  valueArr: Float32Array,
+): Float32Array {
+  const localTime = log.time;
+  if (log.timeOffsetSec === 0 && (localTime as unknown) === (ref as unknown)) {
+    if (valueArr.length >= ref.length) return valueArr;
+    const out = new Float32Array(ref.length);
+    out.fill(NaN);
+    for (let i = 0; i < valueArr.length; i++) out[i] = valueArr[i];
+    return out;
   }
+  const out = new Float32Array(ref.length);
+  out.fill(NaN);
+  const N = localTime.length;
+  if (N === 0 || valueArr.length === 0) return out;
+  const offset = log.timeOffsetSec;
+  const t0 = localTime[0];
+  const tLast = localTime[N - 1];
+  const dt = (tLast - t0) / (N - 1);
+  if (!isFinite(dt) || dt <= 0) return out;
+  const eps = dt * 0.5;
+  const M = Math.min(valueArr.length, N);
+  for (let i = 0; i < ref.length; i++) {
+    const localT = ref[i] - offset;
+    if (localT < t0 - eps || localT > tLast + eps) continue;
+    let idx = Math.round((localT - t0) / dt);
+    if (idx < 0) idx = 0;
+    else if (idx >= M) idx = M - 1;
+    out[i] = valueArr[idx];
+  }
+  return out;
+}
+
+/** Longest aligned time axis among visible logs. Used as the chart x
+ *  (session time). Logs whose aligned range falls outside this window
+ *  simply NaN out in `resampleOntoRef`. */
+const refTime = computed<Float32Array | Float64Array>(() => {
+  let best: Float32Array | Float64Array = new Float32Array(0);
+  let bestLen = 0;
+  for (const { log } of visibleEntries.value) {
+    const aligned = alignedTimeFor(log);
+    if (aligned.length > bestLen) {
+      bestLen = aligned.length;
+      best = aligned;
+    }
+  }
+  if (bestLen === 0) return activeLog.time.value;
   return best;
 });
 
@@ -340,20 +409,19 @@ const data = computed<AlignedData>(() => {
   if (!ready.value || refTime.value.length === 0) {
     return [new Float32Array(0)] as unknown as AlignedData;
   }
-  const xLen = refTime.value.length;
-  const padToRef = (src: Float32Array): Float32Array => {
-    if (src.length === xLen) return src;
-    const out = new Float32Array(xLen);
-    out.fill(NaN);
-    for (let i = 0; i < Math.min(src.length, xLen); i++) out[i] = src[i];
-    return out;
-  };
   const series: Float32Array[] = [];
   for (const t of allTraces.value) {
-    for (const a of t.arrs) series.push(padToRef(a));
+    for (const a of t.arrs) {
+      series.push(resampleOntoRef(t.entry.log, refTime.value, a));
+    }
   }
   return [refTime.value, ...series] as unknown as AlignedData;
 });
+
+// M1.7.1 — project session-time cursor back to the active log's local
+// axis for the readout below. Reactive on activeId (eye-toggle moves
+// focus) and on the active log's `timeOffsetSec` (drag-shift).
+const activeAlign = useAlignedTime(() => activeLog.activeId.value);
 
 const opts = computed<Options>(() => {
   const series: Series[] = [{}];
@@ -468,7 +536,11 @@ function isChannelHiddenActive(fieldName: string): boolean {
 const { cursorTime } = storeToRefs(view);
 const liveSamples = computed<CursorSample[]>(() => {
   if (!ready.value || cursorTime.value === null) return [];
-  const idx = nearestTimeIndex(time.value, cursorTime.value);
+  // cursorTime lives in session time; project to active log's local
+  // axis via its offset before indexing the active log's arrays.
+  const localCursor = activeAlign.alignedCursor.value;
+  if (localCursor === null) return [];
+  const idx = nearestTimeIndex(time.value, localCursor);
   if (idx === null) return [];
   return activeChannels.value
     .filter((c) => !isChannelHiddenActive(c.fieldName))
@@ -494,7 +566,7 @@ function resetZoom() {
 const multiLogNote = computed(() => {
   const n = visibleEntries.value.length;
   if (n <= 1) return '';
-  return `${n} logs overlaid · chips + saturation strips show active log only`;
+  return `${n} logs · session time · drag ⟷ on a roster chip to align · chips + sat strips show active log only`;
 });
 </script>
 

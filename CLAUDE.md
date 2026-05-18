@@ -38,17 +38,18 @@
 Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
 M1 functionally complete (corpus track aside). **Wing analytics
 suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M1.7 multi-log
-compare all shipped.** From this point forward the project is
-**polish + Brian-blocked** (visual-validation calibration flights
-for M3/M5/M6/M7, upstream `blackbox-log` PR, step-response amplitude
-calibration vs PIDscope, M1.7.1 time-alignment UI). M1.7 landed
-2026-05-17: multi-tenant Web Worker, session store, every panel
-migrated off the legacy single-log shim, LogRoster strip with
-family colors + eye-as-focus, Spectrum/Servos/Step iterate
-`session.logs.values()` with HSL-tinted per-(log×axis) traces,
-RecommendTab "log i of N" pager, `useAlignedTime` scaffold for
-the M1.7.1 alignment UI. See [[project-m17-multi-log-architecture]]
-memory for the load-bearing design decisions.
+compare + M1.7.1 time-alignment UI all shipped.** From this point
+forward the project is **polish + Brian-blocked** (visual-validation
+calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
+step-response amplitude calibration vs PIDscope). M1.7 landed
+2026-05-17 + M1.7.1 landed 2026-05-18: multi-tenant Web Worker,
+session store, every panel migrated off the legacy single-log shim,
+LogRoster strip with family colors + eye-as-focus + drag-to-align
+handle, Spectrum/Servos/Step iterate `session.logs.values()` with
+HSL-tinted per-(log×axis) traces, RecommendTab "log i of N" pager,
+ServoPanel adopts session-time x-axis with per-log resampling via
+`useAlignedTime`. See [[project-m17-multi-log-architecture]] memory
+for the load-bearing design decisions.
 
 **Done:**
 
@@ -354,6 +355,34 @@ memory for the load-bearing design decisions.
       btfl_002.bbl seed. `tests/wasm-binding/entry-flow.test.ts`
       updated to seed via `session.__test_seedLog({...})` instead
       of writing legacy-store refs.
+- **M1.7.1 time-alignment UI (2026-05-18)** — drag handle (⟷)
+  per roster chip with shift=fine / alt=coarse scaling (0.002 /
+  0.02 / 0.2 s per px); accent-color `+1.42s` offset badge +
+  reset (↺) appear when offset ≠ 0; window-level mouse handlers
+  with cursor + user-select lock so the drag survives leaving
+  the chip. `useAlignedTime` widened to accept
+  `MaybeRefOrGetter<string|null|undefined>` via `toValue` so
+  panels with a reactive `activeId` can subscribe without
+  re-instantiating the composable (string-overload tests still
+  pass). **ServoPanel adopted session time as its x-axis** —
+  per-log aligned-time arrays via `alignedTimeFor(log)`, longest
+  aligned axis chosen as ref, per-log values resampled onto ref
+  via uniform-rate index math (BF logs are uniform; ~O(1) per
+  sample). Cursor readout for the active log projects session
+  cursor → log-local via `activeAlign.alignedCursor.value`
+  before indexing field arrays. Other compare panels (Spectrum,
+  Step, PIDContribution) still treat their x as raw log-local
+  time — works fine when active-log offset is 0 (common case),
+  migrates the same way when needed. **Float32→Float64 fix in
+  aligned time:** `alignedTimeFor` returns `Float64Array` when
+  offset ≠ 0 (Float32 round-trip at certain offsets like exactly
+  −0.60 s landed `localT = ref[0] - offset` at ~−2.4e-8, just
+  below `t0 = 0`, which dropped sample 0 and cascaded into a
+  blank uPlot chart with no y-axis labels). `resampleOntoRef`
+  also got a half-sample eps tolerance + idx clamp for
+  belt-and-suspenders. 140/140 unit tests + skipped wasm-binding
+  pass; typecheck clean. See [[project-m17-multi-log-architecture]]
+  for the Float32 precision lesson.
 
 **In flight / pending:**
 
@@ -437,20 +466,22 @@ memory for the load-bearing design decisions.
       `latency 50%`. Cross-check expected: btfl_002 should drop
       from peak 335% toward 1.3-2.0 range.
 - M1.0 corpus assembly track (not started).
-- **M1.7.1 time-alignment UI** (~1.5-2 days, scaffold already
-  shipped). What's left:
-    · Drag handle in the LogRoster (per-chip) wired to
-      `session.setTimeOffset(id, x)` — the per-log offset field
-      already exists on LogState (default 0).
-    · Adopt `useAlignedTime(logId)` in at least one chart panel
-      that renders multiple logs against a shared cursor — likely
-      SpectrumPanel or StepResponsePanel, projecting the cursor
-      via `alignedCursor.value` so each log's data indexes off
-      its own aligned time.
-    · Optional: auto-alignment heuristics (first-arm event,
-      first-mode-change, GPS time sync) — math + tests live in
-      `tests/unit/useAlignedTime.test.ts` for the manual-offset
-      case already.
+- **Other compare panels' session-time migration (discretionary).**
+  ServoPanel is the only chart that currently treats its x as
+  session time + projects the cursor via `useAlignedTime`. Spectrum,
+  Step, PIDContribution, and Tracking still use raw log-local x —
+  works perfectly when the active log's offset is 0 (the common
+  case), but a non-zero active-log offset will subtly de-sync those
+  panels' cursor readouts from the trace. Migration is the same
+  pattern: import `useAlignedTime(() => activeLog.activeId.value)`,
+  use `activeAlign.alignedCursor.value` in liveSamples, replace
+  `padToRef` with `resampleOntoRef`-style nearest-sample math, swap
+  refTime to longest aligned-time array. Held until someone
+  actually wants inter-log alignment in those panels.
+- Optional alignment heuristics (first-arm event, first-mode-change,
+  GPS time sync) for `session.setTimeOffset` auto-suggestion. Math
+  + tests for the manual-offset case live in
+  `tests/unit/useAlignedTime.test.ts`.
 - Upstream `blackbox-log` PR (held by Brian).
 
 **Explicitly out of scope (won't build):**
@@ -461,18 +492,19 @@ memory for the load-bearing design decisions.
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** M1.7.1 time-alignment
-UI. M1.7 multi-log compare shipped 2026-05-17 in one full-day
-session (foundation + multi-log UX + compare panels + RecommendTab
-pager + useAlignedTime scaffold + 6 new tests, all 137/137 unit +
-5/5 wasm green). M1.7.1 is the natural pickup point — the math
-composable + per-log `timeOffsetSec` field + 6-case test suite
-are already in place, so the slice is "drag handle in LogRoster
-+ adopt `useAlignedTime` in one compare panel" (~1.5-2 days).
-Everything else is flight-blocked (M3/M4/M5/M6/M7 visual validation
-needs calibration sorties with the right debug modes), held on
-Brian's call (upstream `blackbox-log` PR), or held on PIDscope
-side-by-side (step-response amplitude calibration).
+**Immediate next step when resuming code work:** nothing in the
+code queue is unblocked. M1.7.1 time-alignment shipped 2026-05-18
+(drag handle in LogRoster + ServoPanel session-time adoption +
+Float32→Float64 precision fix in the aligned-time axis; 140/140
+unit tests green, typecheck clean). Remaining work is either
+flight-blocked (M3/M4/M5/M6/M7 visual validation needs
+calibration sorties with the right debug modes), held on Brian's
+call (upstream `blackbox-log` PR), or held on PIDscope side-by-
+side (step-response amplitude calibration). Discretionary code
+slice if someone wants it: migrate Spectrum / Step /
+PIDContribution / Tracking onto session-time x-axes the same
+way ServoPanel was migrated (only matters once a non-zero
+active-log offset becomes a real workflow signal).
 
 ## Cardinal rules
 

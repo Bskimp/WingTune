@@ -12,7 +12,7 @@
 // `session.logs.values()` skip hidden logs entirely. Chips dim when
 // hidden so the state is visible at a glance.
 
-import { computed, ref } from 'vue';
+import { computed, onUnmounted, ref } from 'vue';
 
 import { useSessionStore } from '@/stores/session';
 import { useViewStore } from '@/stores/view';
@@ -33,6 +33,7 @@ interface RosterEntry {
   familyPrimary: string;
   cycled: boolean;
   hidden: boolean;
+  offsetSec: number;
 }
 
 const entries = computed<RosterEntry[]>(() => {
@@ -47,11 +48,83 @@ const entries = computed<RosterEntry[]>(() => {
       familyPrimary: fam.primary,
       cycled: isFamilyCycled(idx),
       hidden: view.isLogHidden(log.id),
+      offsetSec: log.timeOffsetSec,
     });
     idx += 1;
   }
   return out;
 });
+
+// ---- M1.7.1 time-alignment drag handle ---------------------------------
+// Mouse-down on a chip's ⟷ handle captures the current offset and the
+// pointer's screen X; window mousemove translates pixel delta into
+// seconds via `session.setTimeOffset(id, startOffset + dx * scale)`.
+// Modifier keys swap the scale: shift = fine (0.002 s/px), alt = coarse
+// (0.2 s/px), default = 0.02 s/px (~50 px/s — comfortable for typical
+// wing-log alignment of arming/maneuver events).
+//
+// Only one chip drags at a time. `dragLogId` doubles as a "this chip is
+// currently dragging" flag for the highlight style. `onUnmounted` is
+// belt-and-suspenders for the case the user yanks the roster out of
+// the DOM mid-drag (eye-toggle storms, etc.).
+
+interface DragState {
+  logId: string;
+  startClientX: number;
+  startOffsetSec: number;
+}
+const dragState = ref<DragState | null>(null);
+const dragLogId = computed(() => dragState.value?.logId ?? null);
+
+function scaleFor(ev: MouseEvent): number {
+  if (ev.shiftKey) return 0.002;
+  if (ev.altKey) return 0.2;
+  return 0.02;
+}
+
+function onDragStart(ev: MouseEvent, id: string) {
+  ev.preventDefault();
+  const log = session.logs.get(id);
+  if (!log) return;
+  dragState.value = {
+    logId: id,
+    startClientX: ev.clientX,
+    startOffsetSec: log.timeOffsetSec,
+  };
+  document.body.style.cursor = 'ew-resize';
+  document.body.style.userSelect = 'none';
+  window.addEventListener('mousemove', onDragMove);
+  window.addEventListener('mouseup', onDragEnd);
+}
+
+function onDragMove(ev: MouseEvent) {
+  const ds = dragState.value;
+  if (!ds) return;
+  const dx = ev.clientX - ds.startClientX;
+  const scale = scaleFor(ev);
+  session.setTimeOffset(ds.logId, ds.startOffsetSec + dx * scale);
+}
+
+function onDragEnd() {
+  if (!dragState.value) return;
+  dragState.value = null;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  window.removeEventListener('mousemove', onDragMove);
+  window.removeEventListener('mouseup', onDragEnd);
+}
+
+onUnmounted(onDragEnd);
+
+function onResetOffset(id: string) {
+  session.setTimeOffset(id, 0);
+}
+
+function formatOffset(sec: number): string {
+  if (sec === 0) return '';
+  const sign = sec > 0 ? '+' : '';
+  return `${sign}${sec.toFixed(2)}s`;
+}
 
 /** Hidden file input, click()'d by the "+" button. The picker dialog
  *  is the only multi-log entry point in the analysis view today —
@@ -124,6 +197,66 @@ const familyLegend = computed(() => LOG_FAMILIES.map((f) => f.name).join(' · ')
       >
         cycled
       </span>
+      <!-- M1.7.1 alignment drag handle (⟷). Mousedown captures start
+           offset + clientX, window mousemove writes session.setTimeOffset.
+           Shift = fine, alt = coarse. -->
+      <button
+        type="button"
+        class="ml-1 flex items-center cursor-ew-resize"
+        :class="dragLogId === entry.id
+          ? 'text-bp-accent'
+          : 'text-bp-ink-3 hover:text-bp-accent'"
+        :title="`Drag to shift ${entry.name}'s time offset on the session axis · shift = fine · alt = coarse`"
+        @mousedown="onDragStart($event, entry.id)"
+      >
+        <svg
+          width="14"
+          height="11"
+          viewBox="0 0 16 12"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <line x1="3" y1="6" x2="13" y2="6" />
+          <polyline points="5 3 2 6 5 9" />
+          <polyline points="11 3 14 6 11 9" />
+        </svg>
+      </button>
+      <!-- offset badge — visible only when shifted from 0. Accent
+           color so it reads as "this log is intentionally moved." -->
+      <span
+        v-if="entry.offsetSec !== 0"
+        class="font-mono text-[9.5px] text-bp-accent tabular-nums"
+        :title="`Time offset: ${formatOffset(entry.offsetSec)} · projected onto the session time axis as t + offset`"
+      >
+        {{ formatOffset(entry.offsetSec) }}
+      </span>
+      <!-- reset offset button — only when offset != 0 -->
+      <button
+        v-if="entry.offsetSec !== 0"
+        type="button"
+        class="flex items-center text-bp-ink-3 cursor-pointer hover:text-bp-accent"
+        :title="`Reset ${entry.name}'s offset to 0`"
+        @click="onResetOffset(entry.id)"
+      >
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M3 8a5 5 0 1 0 1.5-3.5" />
+          <polyline points="3 2 3 5 6 5" />
+        </svg>
+      </button>
       <!-- eye toggle (hides every trace from this log across panels
            that iterate session.logs — see view.toggleLogVisibility) -->
       <button

@@ -30,7 +30,12 @@
 // pick the right index into their per-log arrays, and
 // `toSessionTime(logT)` to plot trace x-coords on the session axis.
 
-import { computed, type ComputedRef } from 'vue';
+import {
+  computed,
+  toValue,
+  type ComputedRef,
+  type MaybeRefOrGetter,
+} from 'vue';
 
 import { useSessionStore } from '@/stores/session';
 import { useViewStore } from '@/stores/view';
@@ -54,22 +59,32 @@ export interface AlignedTimeHandle {
   alignedCursor: ComputedRef<number | null>;
 }
 
-export function useAlignedTime(logId: string): AlignedTimeHandle {
+/** Accepts a plain logId string OR a ref / getter that yields the
+ *  current logId — the latter for panels whose active log can change
+ *  (eye-toggle moves focus, log removed, etc.). Reading the id via
+ *  `toValue` makes both paths reactive without forcing the caller to
+ *  re-instantiate the composable on every change. */
+export function useAlignedTime(
+  logIdSource: MaybeRefOrGetter<string | null | undefined>,
+): AlignedTimeHandle {
   const session = useSessionStore();
   const view = useViewStore();
 
   const offsetSec = computed(() => {
-    const log = session.logs.get(logId);
-    return log?.timeOffsetSec ?? 0;
+    const id = toValue(logIdSource);
+    if (!id) return 0;
+    return session.logs.get(id)?.timeOffsetSec ?? 0;
   });
 
   function toSessionTime(logLocalSec: number): number | null {
-    if (!session.logs.has(logId)) return null;
+    const id = toValue(logIdSource);
+    if (!id || !session.logs.has(id)) return null;
     return logLocalSec + offsetSec.value;
   }
 
   function toLogTime(sessionSec: number): number | null {
-    if (!session.logs.has(logId)) return null;
+    const id = toValue(logIdSource);
+    if (!id || !session.logs.has(id)) return null;
     return sessionSec - offsetSec.value;
   }
 
