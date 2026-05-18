@@ -1,13 +1,15 @@
 <script setup lang="ts">
 // M5 — HYPERBOLIC TPA curve viz. Scatters (tpa_arg, tpa_factor)
-// samples from the DEBUG_TPA channel pair and overlays the fitted
+// samples from whichever source signalRegistry resolves to
+// (main-frame `wingTpaArg`/`wingTpaFactor` on USE_WING firmware, or
+// the DEBUG_TPA channel pair as fallback) and overlays the fitted
 // curve. Header surfaces residual RMS + sample count + coverage
 // (low/mid/high band dwell seconds — required by the recommender's
 // confidence gate).
 //
 // Single-axis view (not per-R/P/Y) since the TPA curve is whole-craft,
 // not per-axis. Pending state routes through checkTpaCurveFit so
-// non-DEBUG_TPA logs show the "set debug_mode = TPA" message.
+// non-resolvable logs show a clear "set debug_mode = TPA" message.
 
 import { computed, onMounted, ref, watch } from 'vue';
 import type { AlignedData, Options } from 'uplot';
@@ -34,19 +36,22 @@ const COLORS = {
 const logStore = useActiveLog();
 const { time, fields, hydrating, scanReport } = logStore;
 
+// Both signals can resolve via main-frame `wingTpaArg`/`wingTpaFactor`
+// (USE_WING builds, preferred) or DEBUG_TPA channel fallback. Return
+// whichever the registry walked to.
 const argField = computed(() => {
   const cap = scanReport.value?.capability;
   if (!cap) return null;
   const r = resolveSignal('tpa_arg', null, cap);
-  if (r.state !== 'resolved' || r.source.kind !== 'debug') return null;
-  return `debug[${r.source.channel}]`;
+  if (r.state !== 'resolved') return null;
+  return r.source.kind === 'main_frame' ? r.source.field : `debug[${r.source.channel}]`;
 });
 const factorField = computed(() => {
   const cap = scanReport.value?.capability;
   if (!cap) return null;
   const r = resolveSignal('tpa_factor', null, cap);
-  if (r.state !== 'resolved' || r.source.kind !== 'debug') return null;
-  return `debug[${r.source.channel}]`;
+  if (r.state !== 'resolved') return null;
+  return r.source.kind === 'main_frame' ? r.source.field : `debug[${r.source.channel}]`;
 });
 
 async function hydrate() {
@@ -229,7 +234,7 @@ const pendingMessage = computed(() => {
   const ms = moduleState.value;
   if (ms && ms.state === 'blocked') return ms.reason ?? 'TPA curve fit blocked on this log';
   if (ms && ms.state === 'inactive') return ms.reason ?? 'TPA curve channels logged but always zero';
-  if (!argField.value || !factorField.value) return 'DEBUG_TPA channels not resolvable — set `debug_mode = TPA`';
+  if (!argField.value || !factorField.value) return 'TPA signals not resolvable on this log — needs USE_WING firmware (`wingTpaArg`/`wingTpaFactor`) or `debug_mode = TPA`';
   if (fitInputs.value && fitInputs.value.samples.length < 50) {
     return `only ${fitInputs.value?.samples.length ?? 0} active samples — fly more throttle/airspeed variation to characterise the curve`;
   }

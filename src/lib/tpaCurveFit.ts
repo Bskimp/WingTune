@@ -223,17 +223,24 @@ export function buildTpaFitInputs(input: BuildTpaFitInputs): BuiltTpaFitInputs |
   const minActiveX = input.minActiveX ?? 0.05;
   const samples: HyperbolicFitSample[] = [];
 
+  // BF emits `tpa_arg` and `tpa_factor` as integers scaled × 1000
+  // (both via DEBUG_TPA channels and via the main-frame `wingTpa*`
+  // fields — `wingTuneCapture` mirrors the DEBUG_SET value). The
+  // fit math wants `x ∈ [0, 1]` and `y` as a multiplier near 1.0,
+  // so we normalize at the input boundary here.
+  const BF_TPA_SCALE = 1 / 1000;
+
   // Band thresholds — relative to the observed xMax so a low-airspeed
   // log still gets a meaningful low/mid/high split. Bands are
   // (lo, lo+third), (lo+third, lo+2·third), (lo+2·third, max).
   let xMin = Infinity;
   let xMax = -Infinity;
   for (let i = 0; i < n; i++) {
-    const x = xArr[i];
+    const x = xArr[i] * BF_TPA_SCALE;
     if (x < minActiveX) continue;
     if (x < xMin) xMin = x;
     if (x > xMax) xMax = x;
-    samples.push({ x, y: yArr[i] });
+    samples.push({ x, y: yArr[i] * BF_TPA_SCALE });
   }
 
   if (samples.length === 0) {
