@@ -94,17 +94,37 @@ const modules = computed(() => {
 
 const ready = computed(() => fitResult.value !== null);
 
-// 200-point fitted curve overlay across [0, 1].
+// Nelder-Mead can wander out of physically-meaningful TPA-param ranges
+// when the data only covers a narrow slice of [0, 1] (e.g. you never
+// flew above ~50% throttle, so the upper half of the curve is
+// unconstrained and the optimiser drifts to absurd values).
+// Trustworthy = within CLI valid ranges AND not pinned at the expo rails.
+// Untrustworthy fits skip the curve overlay so we don't blow the
+// y autoscale with a curve that goes to ±1e10 at x → 1.
+const fitTrustworthy = computed<boolean>(() => {
+  const r = fitResult.value;
+  if (!r) return false;
+  const p = r.params;
+  if (p.pidThr0   < 0.05 || p.pidThr0   > 10) return false;
+  if (p.pidThr100 < 0.05 || p.pidThr100 > 10) return false;
+  if (Math.abs(p.expoCli) >= 99) return false;
+  if (p.stallThrottle < 0 || p.stallThrottle > 0.999) return false;
+  return true;
+});
+
+// 200-point fitted curve overlay across [0, 1]. NaN-filled when fit is
+// untrustworthy so the curve doesn't render (scatter still does).
 const CURVE_RES = 200;
 const curveData = computed<{ x: Float32Array; y: Float32Array }>(() => {
   const r = fitResult.value;
   const x = new Float32Array(CURVE_RES);
   const y = new Float32Array(CURVE_RES);
-  if (!r) return { x, y };
-  for (let i = 0; i < CURVE_RES; i++) {
-    x[i] = i / (CURVE_RES - 1);
-    y[i] = evaluateHyperbolic(x[i], r.params);
+  for (let i = 0; i < CURVE_RES; i++) x[i] = i / (CURVE_RES - 1);
+  if (!r || !fitTrustworthy.value) {
+    for (let i = 0; i < CURVE_RES; i++) y[i] = NaN;
+    return { x, y };
   }
+  for (let i = 0; i < CURVE_RES; i++) y[i] = evaluateHyperbolic(x[i], r.params);
   return { x, y };
 });
 
@@ -168,13 +188,27 @@ const data = computed<AlignedData>(() => {
   return [xSorted, ySc, yCu] as unknown as AlignedData;
 });
 
+// Bounded y range — TPA factor is a multiplier in roughly [0, 3] for
+// any sane setup; cap so an untrustworthy curve (or even a trustworthy
+// one with a steep low-throttle plateau) can't squash the scatter into
+// a pixel-thin band at y ≈ 0.
+const yRange = computed<[number, number]>(() => {
+  const scat = scatterArrays.value;
+  let yMax = 1.5;
+  for (let i = 0; i < scat.y.length; i++) {
+    const v = scat.y[i];
+    if (Number.isFinite(v) && v > yMax) yMax = v;
+  }
+  return [-0.1, Math.min(5, yMax * 1.2)];
+});
+
 const opts = computed<Options>(() => ({
   width: 800,
   height: 320,
   legend: { show: false },
   scales: {
     x: { time: false, range: [0, 1.02] },
-    y: { auto: true },
+    y: { range: [yRange.value[0], yRange.value[1]] },
   },
   cursor: {
     drag: { x: true, y: true, uni: 50 },
@@ -317,6 +351,14 @@ const rmsTone = computed(() => {
         class="absolute inset-0 flex flex-col items-center justify-center font-mono text-[11px] text-bp-ink-3 text-center px-6"
       >
         {{ pendingMessage }}
+      </div>
+      <div
+        v-else-if="!fitTrustworthy"
+        class="absolute top-1 right-3 z-10 max-w-[58%] px-2 py-1.5 bg-bp-surface-2 border border-bp-warn/40 font-mono text-[10.5px] text-bp-warn leading-snug"
+      >
+        fit unreliable — params out of range (thr0 {{ pidThr0Text }} / thr100 {{ pidThr100Text }} / expo {{ expoText }}).
+        x range only {{ xRangeText }} — fly throttle excursions up to cruise/max to constrain the high-airspeed end.
+        scatter still real; curve overlay suppressed.
       </div>
       <div ref="hostRef" class="w-full" />
     </div>
