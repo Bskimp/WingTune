@@ -387,15 +387,18 @@ all deferred (need calibration flights with the right debug modes).
   link from WingTune.
 
 **Immediate next step when resuming code work:** M1.7 multi-log
-compare. With M-Servo MVP shipped, M1.7 is now the only remaining
-concrete code item that isn't flight-blocked or held-on-Brian.
-Scope reduced (~1 week, no persistence, no MSP/live-FC). Design
-pass + slice plan should land before implementation — see the
-M1.7 section in `docs/wingtune-m1-execution.md`. Everything else
-either needs flight data, is held on Brian's call (upstream PR),
-or is a polish lift. The chart + cursor + recommender +
-capability infrastructure is well-trodden — adding a new
-analytics module follows the established pattern.
+compare slice 1 (session store refactor). With M-Servo MVP
+shipped, M1.7 is now the only remaining concrete code item that
+isn't flight-blocked or held-on-Brian. Scope reduced
+(~3.5-4.5 days for MVP, no persistence, no MSP/live-FC, no
+TuningDiffPanel, no time alignment in MVP — see
+`docs/wingtune-m1.7-execution.md` for the full slice plan +
+locked scope decisions). One-of-N store model picked over focus+
+siblings to match the survey-style tuning workflow (all loaded
+logs are peers). Slice 1 is the foundation refactor; slices 2–5
+are independent after that. Time alignment lives in a follow-up
+M1.7.1 (~1.5-2 days). Everything else either needs flight data,
+is held on Brian's call (upstream PR), or is a polish lift.
 
 ## Cardinal rules
 
