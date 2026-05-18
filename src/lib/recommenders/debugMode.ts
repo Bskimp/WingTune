@@ -26,10 +26,10 @@ interface RecSpec {
   isBlocked: (modules: import('@/lib/capabilityPredicates').ModuleReport) => boolean;
 }
 
-function anyBlocked(perAxis: { roll: Capability; pitch: Capability; yaw: Capability }): boolean {
+function allBlocked(perAxis: { roll: Capability; pitch: Capability; yaw: Capability }): boolean {
   return perAxis.roll.state === 'blocked'
-    || perAxis.pitch.state === 'blocked'
-    || perAxis.yaw.state  === 'blocked';
+    && perAxis.pitch.state === 'blocked'
+    && perAxis.yaw.state  === 'blocked';
 }
 
 const SPECS: RecSpec[] = [
@@ -55,13 +55,13 @@ const SPECS: RecSpec[] = [
     mode: 'SPA',
     moduleLabel: 'SPA effectiveness',
     unlocks: ['SPA effectiveness (per-axis)'],
-    isBlocked: (m) => anyBlocked(m.spaEffectiveness),
+    isBlocked: (m) => allBlocked(m.spaEffectiveness),
   },
   {
     mode: 'S_TERM',
     moduleLabel: 'S-term TPA visualization',
     unlocks: ['S-term TPA visualization (per-axis)'],
-    isBlocked: (m) => anyBlocked(m.sTermTpaViz),
+    isBlocked: (m) => allBlocked(m.sTermTpaViz),
   },
 ];
 
