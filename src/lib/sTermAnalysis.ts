@@ -136,3 +136,71 @@ export function analyzeSTermAxis(
     activePct: (activeSamples / n) * 100,
   };
 }
+
+/** Variant of analyzeSTermAxis that takes the TPA factor DIRECTLY (from
+ *  the firmware's emitted `tpa_factor` channel / `wingTpaFactor` field)
+ *  instead of deriving it from post/pre. Direct is preferred when
+ *  available because the derived post/pre ratio amplifies noise when
+ *  pre is near the active threshold (producing spurious sample-level
+ *  spikes that hold-last can't fix).
+ *
+ *  The displayed series is the direct factor unchanged (continuous —
+ *  TPA factor is airspeed/throttle scheduled regardless of S activity).
+ *  Stats still gate on pre activity because "mean attenuation on S" is
+ *  only meaningful where S exists. */
+export function analyzeSTermAxisDirect(
+  axis: 0 | 1 | 2,
+  preTpaS: Float32Array,
+  directFactor: Float32Array,
+  options: AnalyzeSTermOptions = {},
+): STermAxisAnalysis {
+  const activeThreshold = options.activeThreshold ?? DEFAULT_ACTIVE_THRESHOLD;
+  const n = Math.min(preTpaS.length, directFactor.length);
+
+  if (n === 0) {
+    return {
+      axis,
+      tpaFactorSeries: directFactor,
+      meanAttenuation: 0,
+      minTpaFactor: 1,
+      meanTpaFactor: 1,
+      activeSamples: 0,
+      activePct: 0,
+    };
+  }
+
+  let activeSamples = 0;
+  let factorSum = 0;
+  let minFactor = Infinity;
+  for (let i = 0; i < n; i++) {
+    if (Math.abs(preTpaS[i]) < activeThreshold) continue;
+    const f = directFactor[i];
+    if (!Number.isFinite(f)) continue;
+    factorSum += f;
+    if (f < minFactor) minFactor = f;
+    activeSamples++;
+  }
+
+  if (activeSamples === 0) {
+    return {
+      axis,
+      tpaFactorSeries: directFactor,
+      meanAttenuation: 0,
+      minTpaFactor: 1,
+      meanTpaFactor: 1,
+      activeSamples: 0,
+      activePct: 0,
+    };
+  }
+
+  const meanTpaFactor = factorSum / activeSamples;
+  return {
+    axis,
+    tpaFactorSeries: directFactor,
+    meanAttenuation: Math.max(0, Math.min(1, 1 - meanTpaFactor)),
+    minTpaFactor: minFactor,
+    meanTpaFactor,
+    activeSamples,
+    activePct: (activeSamples / n) * 100,
+  };
+}

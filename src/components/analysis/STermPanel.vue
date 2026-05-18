@@ -31,6 +31,7 @@ import { evaluateModules } from '@/lib/capabilityPredicates';
 import { resolveSignal } from '@/lib/signalRegistry';
 import {
   analyzeSTermAxis,
+  analyzeSTermAxisDirect,
   type STermAxisAnalysis,
 } from '@/lib/sTermAnalysis';
 import {
@@ -51,6 +52,30 @@ const COLORS = {
   warn:   '#ffc46a',
   factor: '#7ee0a8',
 } as const;
+
+/** Replace NaN samples with the previous valid value. analyzeSTermAxis
+ *  emits NaN where pre is below the activeThreshold (post/pre ratio
+ *  uninformative), which made the right-axis TPA factor render as
+ *  vertical bars when uPlot drew NaN→value→NaN→value transitions.
+ *  Holding last keeps the line continuous and readable — TPA factor
+ *  itself doesn't change discontinuously based on S activity (it's
+ *  airspeed/throttle scheduled), so the hold-last value remains a fair
+ *  representation between active windows. Leading NaN preserved until
+ *  the first real sample so we don't fabricate a flat line at the start. */
+function holdLastNaN(src: Float32Array): Float32Array {
+  const out = new Float32Array(src.length);
+  let last = NaN;
+  for (let i = 0; i < src.length; i++) {
+    const v = src[i];
+    if (Number.isFinite(v)) {
+      last = v;
+      out[i] = v;
+    } else {
+      out[i] = last; // NaN until first valid sample, then held
+    }
+  }
+  return out;
+}
 
 interface AxisSpec {
   id: 0 | 1 | 2;
@@ -94,17 +119,27 @@ const logEntries = computed<LogEntry[]>(() => {
 
 const visibleEntries = computed(() => logEntries.value.filter((e) => !e.hidden));
 
-/** Per-log signal resolution for pre/post TPA S on the selected axis.
- *  Each log may have different debug_mode availability so the field
- *  names differ across logs. */
+/** BF emits `tpa_factor` (and the main-frame `wingTpaFactor` mirror)
+ *  as integer × 1000 — see project-bf-wing-debug-modes memory + the
+ *  TPA curve fit's BF_TPA_SCALE constant. */
+const BF_TPA_SCALE = 1 / 1000;
+
+/** Per-log signal resolution for pre/post TPA S on the selected axis
+ *  plus the global TPA factor signal. Each log may have different
+ *  debug_mode availability so the field names differ across logs.
+ *  `factor` resolves to `wingTpaFactor` (main-frame, USE_WING) or
+ *  DEBUG_TPA channel fallback; when unresolved, the panel falls back
+ *  to deriving the factor from post/pre. */
 function resolvePerLog(log: LogState, axis: 0 | 1 | 2): {
   pre: string | null;
   post: string | null;
+  factor: string | null;
 } {
   const cap = log.scanReport?.capability;
-  if (!cap) return { pre: null, post: null };
-  const preR  = resolveSignal('pre_tpa_s',  axis, cap);
-  const postR = resolveSignal('post_tpa_s', axis, cap);
+  if (!cap) return { pre: null, post: null, factor: null };
+  const preR    = resolveSignal('pre_tpa_s',  axis, cap);
+  const postR   = resolveSignal('post_tpa_s', axis, cap);
+  const factorR = resolveSignal('tpa_factor', null, cap);
   const pre  = preR.state === 'resolved'
     ? (preR.source.kind === 'debug'
         ? `debug[${preR.source.channel}]`
@@ -115,17 +150,32 @@ function resolvePerLog(log: LogState, axis: 0 | 1 | 2): {
         ? `debug[${postR.source.channel}]`
         : postR.source.field)
     : null;
-  return { pre, post };
+  const factor = factorR.state === 'resolved'
+    ? (factorR.source.kind === 'debug'
+        ? `debug[${factorR.source.channel}]`
+        : factorR.source.field)
+    : null;
+  return { pre, post, factor };
 }
 
-// Hydrate pre/post for selected axis across every loaded log.
+/** Scale the raw int-encoded factor field into a multiplier. Direct
+ *  firmware emission, no derivation noise. Returns a new Float32Array;
+ *  the source field cache is not mutated. */
+function scaleDirectFactor(src: Float32Array): Float32Array {
+  const out = new Float32Array(src.length);
+  for (let i = 0; i < src.length; i++) out[i] = src[i] * BF_TPA_SCALE;
+  return out;
+}
+
+// Hydrate pre/post + direct factor for selected axis across every loaded log.
 watchEffect(() => {
   const axis = selectedAxis.value;
   for (const { log } of logEntries.value) {
-    const { pre, post } = resolvePerLog(log, axis);
+    const { pre, post, factor } = resolvePerLog(log, axis);
     const wants: string[] = [];
-    if (pre)  wants.push(pre);
-    if (post) wants.push(post);
+    if (pre)    wants.push(pre);
+    if (post)   wants.push(post);
+    if (factor) wants.push(factor);
     if (wants.length > 0) {
       session.ensureFields(log.id, wants).catch(() => {});
     }
@@ -135,9 +185,9 @@ watchEffect(() => {
 // Active log readouts for stats / pending message.
 const activeResolved = computed(() => {
   const id = activeLog.activeId.value;
-  if (!id) return { pre: null, post: null };
+  if (!id) return { pre: null, post: null, factor: null };
   const log = session.logs.get(id);
-  if (!log) return { pre: null, post: null };
+  if (!log) return { pre: null, post: null, factor: null };
   return resolvePerLog(log, selectedAxis.value);
 });
 
@@ -147,18 +197,29 @@ const activePreArr = computed<Float32Array | undefined>(() =>
 const activePostArr = computed<Float32Array | undefined>(() =>
   activeResolved.value.post ? activeLog.fields.value.get(activeResolved.value.post) : undefined,
 );
+const activeFactorArr = computed<Float32Array | undefined>(() =>
+  activeResolved.value.factor ? activeLog.fields.value.get(activeResolved.value.factor) : undefined,
+);
 
 const isHydrating = computed(() => {
-  const pre  = activeResolved.value.pre;
-  const post = activeResolved.value.post;
-  return (pre  !== null && activeLog.hydrating.value.has(pre))  ||
-         (post !== null && activeLog.hydrating.value.has(post));
+  const pre    = activeResolved.value.pre;
+  const post   = activeResolved.value.post;
+  const factor = activeResolved.value.factor;
+  return (pre    !== null && activeLog.hydrating.value.has(pre))  ||
+         (post   !== null && activeLog.hydrating.value.has(post)) ||
+         (factor !== null && activeLog.hydrating.value.has(factor));
 });
 
 const activeAnalysis = computed<STermAxisAnalysis | null>(() => {
   const pre  = activePreArr.value;
   const post = activePostArr.value;
   if (!pre || !post) return null;
+  // Prefer firmware-direct TPA factor when resolvable (continuous,
+  // no derivation noise from post/pre at threshold borderlines).
+  const factor = activeFactorArr.value;
+  if (factor) {
+    return analyzeSTermAxisDirect(selectedAxis.value, pre, scaleDirectFactor(factor));
+  }
   return analyzeSTermAxis(selectedAxis.value, pre, post);
 });
 
@@ -193,18 +254,22 @@ const allTraces = computed<LogTraces[]>(() => {
   const out: LogTraces[] = [];
   const axis = selectedAxis.value;
   for (const entry of visibleEntries.value) {
-    const { pre, post } = resolvePerLog(entry.log, axis);
+    const { pre, post, factor } = resolvePerLog(entry.log, axis);
     if (!pre || !post) continue;
     const preArr  = entry.log.fields.get(pre);
     const postArr = entry.log.fields.get(post);
     if (!preArr || !postArr || preArr.length === 0 || postArr.length === 0) continue;
-    const a = analyzeSTermAxis(axis, preArr, postArr);
-    out.push({
-      entry,
-      preArr,
-      postArr,
-      factorArr: a.tpaFactorSeries,
-    });
+    // Direct factor preferred when available + hydrated; otherwise
+    // fall back to derive-from-post-pre with hold-last on NaN gaps.
+    const directRaw = factor ? entry.log.fields.get(factor) : undefined;
+    let factorArr: Float32Array;
+    if (directRaw && directRaw.length > 0) {
+      factorArr = scaleDirectFactor(directRaw);
+    } else {
+      const a = analyzeSTermAxis(axis, preArr, postArr);
+      factorArr = holdLastNaN(a.tpaFactorSeries);
+    }
+    out.push({ entry, preArr, postArr, factorArr });
   }
   return out;
 });
@@ -228,29 +293,45 @@ const data = computed<AlignedData>(() => {
 });
 
 const opts = computed<Options>(() => {
+  const traces = allTraces.value;
+  // Single-log mode: skip family tinting so the footer-legend swatches
+  // (raw COLORS.*) match the on-chart line colors. Multi-log keeps the
+  // tinting so each log's traces are distinguishable by family hue.
+  const multiLog = traces.length > 1;
   const series: Series[] = [{}];
-  for (const t of allTraces.value) {
+  for (const t of traces) {
     const fam = t.entry.family;
     series.push({
       label: `${t.entry.log.name} pre-TPA S`,
-      stroke: tintTowardFamily(COLORS.warn, fam),
+      stroke: multiLog ? tintTowardFamily(COLORS.warn, fam) : COLORS.warn,
       width: 1,
       scale: 'y',
     });
     series.push({
       label: `${t.entry.log.name} post-TPA S`,
-      stroke: tintTowardFamily(COLORS.accent, fam),
+      stroke: multiLog ? tintTowardFamily(COLORS.accent, fam) : COLORS.accent,
       width: 1.5,
       scale: 'y',
     });
     series.push({
       label: `${t.entry.log.name} TPA factor`,
-      stroke: tintTowardFamily(COLORS.factor, fam),
+      stroke: multiLog ? tintTowardFamily(COLORS.factor, fam) : COLORS.factor,
       width: 0.75,
       scale: 'y2',
-      spanGaps: false,
     });
   }
+  // Dynamic y2 ceiling — BF TPA factor can boost above 1.0 at low
+  // airspeed (HYPERBOLIC curve THR0 often > 1.0 means amplification,
+  // not attenuation). Keep a floor of 1.5 so the y=1.0 reference line
+  // stays comfortably mid-axis on logs without significant boost.
+  let factorMax = 1.5;
+  for (const t of traces) {
+    for (let i = 0; i < t.factorArr.length; i++) {
+      const v = t.factorArr[i];
+      if (Number.isFinite(v) && v > factorMax) factorMax = v;
+    }
+  }
+  const y2Top = Math.min(3.0, factorMax * 1.05);
   return {
     width: 800,
     height: 300,
@@ -258,7 +339,7 @@ const opts = computed<Options>(() => {
     scales: {
       x:  { time: false, range: sessionTimeRangeFn },
       y:  { auto: true },
-      y2: { auto: false, range: [-0.05, 1.50] },
+      y2: { auto: false, range: [-0.05, y2Top] },
     },
     cursor: {
       drag: { x: true, y: false, uni: 50 },
