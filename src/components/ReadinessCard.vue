@@ -2,18 +2,24 @@
 // M1.6 readiness report — surfaces the capability layer of the trust
 // model. For each analysis module (M2 PIDFS decomp, M3 airspeed, M4
 // filters, M5 TPA, M6 SPA, M7 S-term TPA viz), shows whether the
-// module can run against the loaded log, with the four-state
+// module can run against the loaded log, with the five-state
 // icon set per `wingtune-confidence-scoring`:
 //
-//   available  ✓ green   — module can run, all required inputs present + active
-//   partial    ⚠ amber   — module can run with reduced functionality
-//   inactive   ⚠ gray    — feature disabled in firmware (logged but all zero)
-//   blocked    ✗ red     — module cannot run; reason explains why
+//   available    ✓ green  — module can run, all required inputs present + active
+//   partial      ⚠ amber  — module can run with reduced functionality
+//   inactive     ⚠ gray   — feature disabled in firmware (logged but all zero)
+//   blocked      ✗ red    — module cannot run; reason explains why
+//   out_of_range ⚠ red    — the right source was found but its sampled values
+//                           fall outside `expected_range` (channel-index or
+//                           firmware-scaling mismatch). Distinct from blocked:
+//                           the source IS there, but the values aren't trustworthy.
+//                           Rendered with structured observed/expected comparison.
 //
 // Per-axis modules render as three rows (R / P / Y). The overall
 // summary pill aggregates: "N of M modules runnable" with the count
 // derived from `available` + `partial` (anything that produces useful
-// output for the user).
+// output for the user). `out_of_range` rolls up as not-runnable (same
+// tier as blocked) since the analyzer can't safely consume the values.
 //
 // `via` suffix renders inline when set (informational; tells the
 // user whether they're on the firmware-PR fast path or still using
@@ -66,7 +72,7 @@ const rows = computed<Row[]>(() => {
 });
 
 const counts = computed(() => {
-  const c = { available: 0, partial: 0, inactive: 0, blocked: 0 };
+  const c = { available: 0, partial: 0, inactive: 0, blocked: 0, out_of_range: 0 };
   for (const r of rows.value) c[r.capability.state] += 1;
   return c;
 });
@@ -86,20 +92,31 @@ const overall = computed<{ label: string; tone: 'ok' | 'warn' | 'stamp' | 'dim' 
 
 function iconFor(state: CapabilityState): string {
   switch (state) {
-    case 'available': return '✓';
-    case 'partial':   return '⚠';
-    case 'inactive':  return '⚠';
-    case 'blocked':   return '✗';
+    case 'available':    return '✓';
+    case 'partial':      return '⚠';
+    case 'inactive':     return '⚠';
+    case 'blocked':      return '✗';
+    case 'out_of_range': return '⚠';
   }
 }
 
 function colorFor(state: CapabilityState): string {
   switch (state) {
-    case 'available': return 'text-bp-ok';
-    case 'partial':   return 'text-bp-warn';
-    case 'inactive':  return 'text-bp-ink-3';
-    case 'blocked':   return 'text-bp-stamp';
+    case 'available':    return 'text-bp-ok';
+    case 'partial':      return 'text-bp-warn';
+    case 'inactive':     return 'text-bp-ink-3';
+    case 'blocked':      return 'text-bp-stamp';
+    // out_of_range shares the stamp/red tone with blocked — both mean
+    // "module can't run" — but is distinguished by icon (⚠ vs ✗) +
+    // structured observed/expected sub-rows in the template.
+    case 'out_of_range': return 'text-bp-stamp';
   }
+}
+
+/** Format a state name for the all-caps state label at right of the row.
+ *  out_of_range → "out of range" (spaces, not underscores). */
+function stateLabel(state: CapabilityState): string {
+  return state === 'out_of_range' ? 'out of range' : state;
 }
 
 function toneClass(tone: 'ok' | 'warn' | 'stamp' | 'dim'): string {
@@ -131,7 +148,7 @@ function viaLabel(via: 'main_frame' | 'debug' | 'mixed'): string {
           READINESS · MODULE CAPABILITY
         </div>
         <div class="font-slab text-[14px] font-semibold text-bp-ink mt-0.5">
-          {{ counts.available }} ready · {{ counts.partial }} partial · {{ counts.inactive }} inactive · {{ counts.blocked }} blocked
+          {{ counts.available }} ready · {{ counts.partial }} partial · {{ counts.inactive }} inactive · {{ counts.blocked }} blocked<template v-if="counts.out_of_range > 0"> · {{ counts.out_of_range }} out of range</template>
         </div>
       </div>
       <span
@@ -159,7 +176,7 @@ function viaLabel(via: 'main_frame' | 'debug' | 'mixed'): string {
           <div class="flex items-baseline gap-2 flex-wrap">
             <span
               class="font-mono text-[12px]"
-              :class="row.capability.state === 'blocked' ? 'text-bp-ink-3' : 'text-bp-ink'"
+              :class="(row.capability.state === 'blocked' || row.capability.state === 'out_of_range') ? 'text-bp-ink-3' : 'text-bp-ink'"
             >{{ row.label }}</span>
             <span
               v-if="row.capability.via"
@@ -168,10 +185,26 @@ function viaLabel(via: 'main_frame' | 'debug' | 'mixed'): string {
             <span
               class="font-sans text-[9px] tracking-[0.2em] uppercase font-bold ml-auto"
               :class="colorFor(row.capability.state)"
-            >{{ row.capability.state }}</span>
+            >{{ stateLabel(row.capability.state) }}</span>
+          </div>
+          <!-- Structured observed/expected block for out_of_range. The
+               reason string carries the same info inline but the visual
+               hierarchy here makes the mismatch easier to scan. -->
+          <div
+            v-if="row.capability.rangeInfo"
+            class="font-mono text-[11px] text-bp-ink-3 mt-0.5 leading-snug"
+          >
+            <div>
+              <span class="text-bp-stamp">{{ row.capability.rangeInfo.sourceLabel }}</span>
+              values [{{ row.capability.rangeInfo.observed[0].toFixed(0) }}..{{ row.capability.rangeInfo.observed[1].toFixed(0) }}]
+            </div>
+            <div>
+              expected [{{ row.capability.rangeInfo.expected[0].toFixed(0) }}..{{ row.capability.rangeInfo.expected[1].toFixed(0) }}]
+              <span class="text-bp-ink-3 ml-1">— channel-index or firmware-scaling mismatch?</span>
+            </div>
           </div>
           <div
-            v-if="row.capability.reason"
+            v-else-if="row.capability.reason"
             class="font-sans text-[11.5px] text-bp-ink-3 mt-0.5 leading-snug"
           >
             {{ row.capability.reason }}

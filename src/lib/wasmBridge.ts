@@ -13,6 +13,14 @@
 export interface SampleCheck {
   all_zero: boolean;
   has_content: boolean;
+  /** Minimum value observed across sampled frames. `null` when the
+   *  field was absent from every sampled frame. Used by signalRegistry
+   *  to flag `out_of_range` resolutions when values fall outside a
+   *  registered `expected_range`. */
+  value_min: number | null;
+  /** Maximum value observed across sampled frames. Same null
+   *  semantics as `value_min`. */
+  value_max: number | null;
 }
 
 export interface FrameIndex {
@@ -36,6 +44,10 @@ export interface CapabilityReport {
   frame_index: FrameIndex;
   total_frames: number;
   voltage_sag_summary: VoltageSagSummary | null;
+  /** BF firmware revision string from the log header. Duplicated from
+   *  ScanReport.firmware_revision so signalRegistry's `min_firmware`
+   *  source-eligibility gate doesn't need a separate plumbing path. */
+  firmware_revision: string | null;
 }
 
 export interface DynNotchConfig {

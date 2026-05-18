@@ -24,23 +24,39 @@
 // coming.
 
 import type { CapabilityReport, SampleCheck } from '@/lib/wasmBridge';
-import { resolveSignal, type Axis } from '@/lib/signalRegistry';
+import { resolveSignal, type Axis, type ResolveResult } from '@/lib/signalRegistry';
 
 // ---- type contracts (skill-spec'd) -------------------------------------
 
-export type CapabilityState = 'available' | 'partial' | 'inactive' | 'blocked';
+/** `out_of_range` is a distinct fifth state for "the right source was
+ *  found, but its sampled values fall outside the expected_range
+ *  declared in signalRegistry." It indicates a channel-index mismatch
+ *  or firmware-version scaling shift — the analysis can't safely run,
+ *  but the diagnostic info points the user (and us) at the cause
+ *  rather than reading as a generic "blocked." */
+export type CapabilityState = 'available' | 'partial' | 'inactive' | 'blocked' | 'out_of_range';
 
 export interface Capability {
   state: CapabilityState;
   /** Human-readable; surfaced in the readiness report as the second
    *  line under the module name. Required for `blocked` and `partial`,
-   *  recommended for `inactive`. */
+   *  recommended for `inactive`. For `out_of_range`, populated with
+   *  the formatted observed-vs-expected diagnostic. */
   reason?: string;
   /** Which source path the signal-registry walk resolved through.
    *  Surfaced as a "(via …)" suffix in the UI. Only meaningful for
    *  predicates that route through the registry; basicViewing /
    *  pidfsDecomp leave this undefined. */
   via?: 'main_frame' | 'debug' | 'mixed';
+  /** Only set when `state === 'out_of_range'`. Carries the structured
+   *  diagnostic so the UI can render a labeled comparison rather than
+   *  parsing it out of the reason string. */
+  rangeInfo?: {
+    expected: readonly [number, number];
+    observed: readonly [number, number];
+    /** Human-readable source label, e.g. "DEBUG_TPA ch3" or "gyroUnfilt[0]". */
+    sourceLabel: string;
+  };
 }
 
 /** Three-state field presence. Single-source signals get classified
@@ -171,6 +187,32 @@ function combineVia(
   return vias.every((v) => v === first) ? first : 'mixed';
 }
 
+/** Format a SignalSource as a human-readable label for the
+ *  out_of_range diagnostic ("DEBUG_TPA ch3" / "gyroUnfilt[0]"). */
+function sourceLabel(source: ResolveResult & { state: 'out_of_range' }): string {
+  const s = source.source;
+  return s.kind === 'debug' ? `DEBUG_${s.mode} ch${s.channel}` : s.field;
+}
+
+/** Build the out_of_range Capability return for a single-signal predicate.
+ *  Reason text follows a consistent shape so the UI can pattern-match
+ *  on it later if needed; rangeInfo carries the same data structured. */
+function outOfRangeCapability(signal: ResolveResult & { state: 'out_of_range' }): Capability {
+  const label = sourceLabel(signal);
+  const obs = `[${signal.observed[0].toFixed(0)}..${signal.observed[1].toFixed(0)}]`;
+  const exp = `[${signal.expected[0].toFixed(0)}..${signal.expected[1].toFixed(0)}]`;
+  return {
+    state: 'out_of_range',
+    reason: `${label} values ${obs}, expected ${exp} — channel mapping or firmware-version scaling mismatch?`,
+    via: signal.via,
+    rangeInfo: {
+      expected: signal.expected,
+      observed: signal.observed,
+      sourceLabel: label,
+    },
+  };
+}
+
 /** TPA curve fit reads `tpa_arg` (curve input) + `tpa_factor` (curve
  *  output) directly from the DEBUG_TPA channel pair, and fits the
  *  HYPERBOLIC curve formula from BF PR #13805 against the scatter
@@ -180,6 +222,13 @@ function combineVia(
 export function checkTpaCurveFit(capability: CapabilityReport): Capability {
   const arg    = resolveSignal('tpa_arg', null, capability);
   const factor = resolveSignal('tpa_factor', null, capability);
+  // out_of_range fires before missing/inactive — it's a more specific
+  // diagnostic than either ("the channel IS there, but values are wrong"
+  // tells the user something concrete, vs the generic "missing"). Take
+  // the first out_of_range encountered (arg before factor) so the user
+  // gets one clear pointer rather than a smushed multi-source message.
+  if (arg.state === 'out_of_range')    return outOfRangeCapability(arg);
+  if (factor.state === 'out_of_range') return outOfRangeCapability(factor);
   if (arg.state === 'missing' || factor.state === 'missing') {
     return {
       state: 'blocked',
@@ -222,6 +271,7 @@ export function checkAirspeedBasicFit(capability: CapabilityReport): Capability 
  *  itself is runnable without this. */
 export function checkAirspeedTpaCrossCheck(capability: CapabilityReport): Capability {
   const speed = resolveSignal('tpa_speed_est', null, capability);
+  if (speed.state === 'out_of_range') return outOfRangeCapability(speed);
   if (speed.state === 'missing') {
     return {
       state: 'blocked',
@@ -242,6 +292,7 @@ export function checkAirspeedTpaCrossCheck(capability: CapabilityReport): Capabi
  *  requested axis. Debug-mode-only signal (no main-frame source). */
 export function checkSpaEffectiveness(axis: Axis, capability: CapabilityReport): Capability {
   const spa = resolveSignal('spa', axis, capability);
+  if (spa.state === 'out_of_range') return outOfRangeCapability(spa);
   if (spa.state === 'missing') {
     const ax = ['roll', 'pitch', 'yaw'][axis];
     return {
@@ -277,6 +328,7 @@ export function checkSTermTpaViz(axis: Axis, capability: CapabilityReport): Capa
 
   // pre-TPA s-term: debug-only via S_TERM mode
   const pre = resolveSignal('pre_tpa_s', axis, capability);
+  if (pre.state === 'out_of_range') return outOfRangeCapability(pre);
   if (pre.state === 'missing') {
     return {
       state: 'blocked',

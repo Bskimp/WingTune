@@ -33,16 +33,32 @@ pub struct CapabilityReport {
     /// log doesn't carry battery data. M3+ uses this as a confidence
     /// input for tuning recommendations.
     pub voltage_sag_summary: Option<VoltageSagSummary>,
+    /// BF firmware revision string from the log header (e.g.
+    /// `"Betaflight/STM32F411 4.5.0 dev (abc123)"`). Duplicated from
+    /// `ScanReport.firmware_revision` so Layer 2's `resolveSignal()`
+    /// can apply `SignalSource.min_firmware` source-eligibility gates
+    /// without callers needing to pass it separately.
+    pub firmware_revision: Option<String>,
 }
 
 /// Cheap per-field "is this field actually carrying signal?" indicator.
 /// `all_zero` is true when every sampled frame had value 0; `has_content`
 /// is true when at least one sampled frame had a non-zero value. Both can
 /// be false if the field wasn't present in the sampled frames at all.
+///
+/// `value_min` / `value_max` are the lowest and highest values observed
+/// across the sampled frames. `None` when the field was absent from
+/// every sampled frame (no value to measure). Used by Layer 2's signal
+/// registry to surface `out_of_range` resolution states when sampled
+/// values fall outside a per-signal `expected_range` — guards against
+/// silent failure when a debug-mode channel index is wrong or a
+/// firmware update changes a field's scaling without changing its name.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SampleCheck {
     pub all_zero: bool,
     pub has_content: bool,
+    pub value_min: Option<f64>,
+    pub value_max: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -138,6 +138,14 @@ pub fn scan_with_progress(
     let gps_field_count = headers.gps_frame_def().map_or(0, |d| d.len());
     let mut main_nonzero: Vec<bool> = vec![false; main_field_count];
     let mut gps_nonzero: Vec<bool> = vec![false; gps_field_count];
+    // Per-field running min/max across sampled frames. `None` until the
+    // first sample lands; `Some(v)` afterwards. Used to populate
+    // `SampleCheck.value_min/value_max` for the signal registry's
+    // `expected_range` guard (Layer 2).
+    let mut main_min: Vec<Option<f64>> = vec![None; main_field_count];
+    let mut main_max: Vec<Option<f64>> = vec![None; main_field_count];
+    let mut gps_min: Vec<Option<f64>> = vec![None; gps_field_count];
+    let mut gps_max: Vec<Option<f64>> = vec![None; gps_field_count];
 
     let mut parser = headers.data_parser();
     let mut total_frames: u64 = 0;
@@ -159,12 +167,15 @@ pub fn scan_with_progress(
                 time_sec.push(dt_sec);
 
                 if total_frames.is_multiple_of(SAMPLE_STRIDE) {
-                    for (i, slot) in main_nonzero.iter_mut().enumerate() {
-                        if *slot { continue; }
+                    for i in 0..main_field_count {
                         if let Some(value) = frame.get(i) {
-                            if main_value_to_f32(value) != 0.0 {
-                                *slot = true;
+                            let v_f32 = main_value_to_f32(value);
+                            if !main_nonzero[i] && v_f32 != 0.0 {
+                                main_nonzero[i] = true;
                             }
+                            let v = v_f32 as f64;
+                            main_min[i] = Some(main_min[i].map_or(v, |prev| prev.min(v)));
+                            main_max[i] = Some(main_max[i].map_or(v, |prev| prev.max(v)));
                         }
                     }
                 }
@@ -179,12 +190,15 @@ pub fn scan_with_progress(
             }
             ParserEvent::Gps(frame) => {
                 gps_present = true;
-                for (i, slot) in gps_nonzero.iter_mut().enumerate() {
-                    if *slot { continue; }
+                for i in 0..gps_field_count {
                     if let Some(value) = frame.get(i) {
-                        if gps_value_to_f32(value) != 0.0 {
-                            *slot = true;
+                        let v_f32 = gps_value_to_f32(value);
+                        if !gps_nonzero[i] && v_f32 != 0.0 {
+                            gps_nonzero[i] = true;
                         }
+                        let v = v_f32 as f64;
+                        gps_min[i] = Some(gps_min[i].map_or(v, |prev| prev.min(v)));
+                        gps_max[i] = Some(gps_max[i].map_or(v, |prev| prev.max(v)));
                     }
                 }
             }
@@ -200,14 +214,24 @@ pub fn scan_with_progress(
     for (i, field) in headers.main_frame_def().iter().enumerate() {
         sample_check.insert(
             field.name.to_string(),
-            SampleCheck { all_zero: !main_nonzero[i], has_content: main_nonzero[i] },
+            SampleCheck {
+                all_zero: !main_nonzero[i],
+                has_content: main_nonzero[i],
+                value_min: main_min[i],
+                value_max: main_max[i],
+            },
         );
     }
     if let Some(gps_def) = headers.gps_frame_def() {
         for (i, field) in gps_def.iter().enumerate() {
             sample_check.insert(
                 format!("gps:{}", field.name),
-                SampleCheck { all_zero: !gps_nonzero[i], has_content: gps_nonzero[i] },
+                SampleCheck {
+                    all_zero: !gps_nonzero[i],
+                    has_content: gps_nonzero[i],
+                    value_min: gps_min[i],
+                    value_max: gps_max[i],
+                },
             );
         }
     }
@@ -220,6 +244,7 @@ pub fn scan_with_progress(
         frame_index: FrameIndex::default(),
         total_frames,
         voltage_sag_summary: None,
+        firmware_revision: firmware_revision.clone(),
     };
 
     Ok(ScanReport {
