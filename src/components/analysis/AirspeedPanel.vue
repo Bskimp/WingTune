@@ -11,20 +11,26 @@
 // Optional:
 //   · attitude[1]   — pitch (Signed deci-degrees; converted to radians).
 //                     When missing the panel falls back to assuming level
-//                     flight (pitch=0) and surfaces a warning chip; the
-//                     fit still runs but the gravity term is physically
-//                     unconstrained.
+//                     flight (pitch=0); the fit still runs but the
+//                     gravity term is physically unconstrained.
 //
-// Fit window: trimmed to the time range where GPS samples exist. In
-// real logs GPS lock arrives well after arm — LOG00113 only has GPS
-// from t≈55s onward. Outside that window the model would extrapolate
-// from a clamped GPS endpoint, which feeds the fit garbage.
+// M1.7.1 multi-log: chart x is SESSION time; each visible log fits its
+// OWN BASIC model from its own GPS data (fits are independent per log)
+// and contributes a (gps, predicted) pair tinted toward its family
+// color. Outside each log's fit window (the GPS-locked sub-range of
+// the log) traces clamp-extend to the edge value — visually this
+// reads as a flat segment at log boundaries, which is benign for the
+// compare workflow. Fit window text, recovered params (delay, gravity,
+// max V, R², RMS), and cursor readout all remain anchored to the
+// active log; flip the eye to inspect another log's fit.
 
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watchEffect } from 'vue';
 import { storeToRefs } from 'pinia';
-import type { AlignedData, Options } from 'uplot';
+import type { AlignedData, Options, Series } from 'uplot';
 
+import { useSessionStore, type LogState } from '@/stores/session';
 import { useActiveLog } from '@/composables/useActiveLog';
+import { useAlignedTime } from '@/composables/useAlignedTime';
 import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
@@ -36,6 +42,16 @@ import {
   type AirspeedFitResult,
   type BuiltInputs,
 } from '@/lib/airspeedFit';
+import {
+  resampleOntoRef,
+  sessionTimeRangeFn,
+  useSessionRefTime,
+} from '@/lib/sessionTime';
+import {
+  familyForIndex,
+  tintTowardFamily,
+  type FamilySpec,
+} from '@/lib/logColors';
 
 const COLORS = {
   ink3:   '#7a90b0',
@@ -52,91 +68,166 @@ const REQUIRED_AND_OPTIONAL = [
   'gps:GPS_speed',
 ] as const;
 
-const logStore = useActiveLog();
+const session = useSessionStore();
 const view = useViewStore();
-const { time, gpsTimeSec, fields, hydrating } = logStore;
+const activeLog = useActiveLog();
 
-onMounted(() => {
-  logStore.ensureFields([...REQUIRED_AND_OPTIONAL]);
+interface LogEntry {
+  log: LogState;
+  family: FamilySpec;
+  hidden: boolean;
+}
+
+const logEntries = computed<LogEntry[]>(() => {
+  const out: LogEntry[] = [];
+  let idx = 0;
+  for (const log of session.logs.values()) {
+    out.push({
+      log,
+      family: familyForIndex(idx),
+      hidden: view.isLogHidden(log.id),
+    });
+    idx += 1;
+  }
+  return out;
 });
 
-const isHydrating = computed(
-  () => REQUIRED_AND_OPTIONAL.some((f) => hydrating.value.has(f)),
+const visibleEntries = computed(() => logEntries.value.filter((e) => !e.hidden));
+
+// Hydrate required + optional fields across every loaded log.
+watchEffect(() => {
+  for (const { log } of logEntries.value) {
+    session.ensureFields(log.id, [...REQUIRED_AND_OPTIONAL]).catch(() => {});
+  }
+});
+
+const isHydrating = computed(() =>
+  REQUIRED_AND_OPTIONAL.some((f) => activeLog.hydrating.value.has(f)),
 );
 
-const built = computed<BuiltInputs | null>(() => {
-  return buildAirspeedFitInputs({
-    time: time.value,
-    gpsTimeSec: gpsTimeSec.value,
-    fields: fields.value,
-  });
-});
+// Active log readouts.
+const activeBuilt = computed<BuiltInputs | null>(() =>
+  buildAirspeedFitInputs({
+    time:       activeLog.time.value,
+    gpsTimeSec: activeLog.gpsTimeSec.value,
+    fields:     activeLog.fields.value,
+  }),
+);
 
-const fitResult = computed<AirspeedFitResult | null>(() => {
-  const b = built.value;
+const activeFit = computed<AirspeedFitResult | null>(() => {
+  const b = activeBuilt.value;
   if (!b) return null;
   return fitBasicAirspeedModel(b.inputs);
 });
 
-const ready = computed(() => fitResult.value !== null);
+const ready = computed(() => activeFit.value !== null);
 
-const data = computed<AlignedData>(() => {
-  if (!ready.value) {
-    return [new Float32Array(0), new Float32Array(0), new Float32Array(0)] as unknown as AlignedData;
+const refTime = useSessionRefTime();
+const activeAlign = useAlignedTime(() => activeLog.activeId.value);
+
+// --- per-log fits ---
+
+interface LogFitBundle {
+  entry: LogEntry;
+  built: BuiltInputs;
+  result: AirspeedFitResult;
+}
+
+const allFits = computed<LogFitBundle[]>(() => {
+  const out: LogFitBundle[] = [];
+  for (const entry of visibleEntries.value) {
+    const built = buildAirspeedFitInputs({
+      time:       entry.log.time,
+      gpsTimeSec: entry.log.gpsTimeSec,
+      fields:     entry.log.fields,
+    });
+    if (!built) continue;
+    const result = fitBasicAirspeedModel(built.inputs);
+    out.push({ entry, built, result });
   }
-  const b = built.value!;
-  const result = fitResult.value!;
-  return [b.inputs.time, b.inputs.gpsSpeed, result.predicted] as unknown as AlignedData;
+  return out;
 });
 
-const opts = computed<Options>(() => ({
-  width: 800,
-  height: 280,
-  legend: { show: false },
-  scales: {
-    x: { time: false },
-    y: { auto: true },
-  },
-  cursor: {
-    drag: { x: true, y: false, uni: 50 },
-    focus: { prox: 30 },
-    points: { show: true, size: 5 },
-  },
-  series: [
-    {},
-    { label: 'gps speed', stroke: COLORS.ink2,   width: 1,    dash: [4, 2] },
-    { label: 'predicted', stroke: COLORS.accent, width: 1.25 },
-  ],
-  axes: [
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
+const data = computed<AlignedData>(() => {
+  if (!ready.value || refTime.value.length === 0 || allFits.value.length === 0) {
+    return [
+      new Float32Array(0),
+      new Float32Array(0),
+      new Float32Array(0),
+    ] as unknown as AlignedData;
+  }
+  const series: Float32Array[] = [];
+  for (const f of allFits.value) {
+    // Both gpsSpeed and predicted are indexed by built.inputs.time
+    // (the GPS-trimmed fit window, a sub-range of log.time). Pass it
+    // as the localTime override so resample maps correctly.
+    series.push(resampleOntoRef(f.entry.log, refTime.value, f.built.inputs.gpsSpeed, f.built.inputs.time));
+    series.push(resampleOntoRef(f.entry.log, refTime.value, f.result.predicted,    f.built.inputs.time));
+  }
+  return [refTime.value, ...series] as unknown as AlignedData;
+});
+
+const opts = computed<Options>(() => {
+  const series: Series[] = [{}];
+  for (const f of allFits.value) {
+    const fam = f.entry.family;
+    series.push({
+      label: `${f.entry.log.name} gps speed`,
+      stroke: tintTowardFamily(COLORS.ink2, fam),
+      width: 1,
+      dash: [4, 2],
+    });
+    series.push({
+      label: `${f.entry.log.name} predicted`,
+      stroke: tintTowardFamily(COLORS.accent, fam),
+      width: 1.25,
+    });
+  }
+  return {
+    width: 800,
+    height: 280,
+    legend: { show: false },
+    scales: {
+      x: { time: false, range: sessionTimeRangeFn },
+      y: { auto: true },
     },
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      size:   50,
+    cursor: {
+      drag: { x: true, y: false, uni: 50 },
+      focus: { prox: 30 },
+      points: { show: true, size: 5 },
     },
-  ],
-  hooks: {
-    setCursor: [
-      (u) => {
-        const idx = u.cursor.idx;
-        if (idx == null) {
-          view.clearCursorIfNotPinned();
-          return;
-        }
-        if (view.cursorPinned) return;
-        const t = u.data[0][idx];
-        if (typeof t === 'number') view.setCursor(t);
+    series,
+    axes: [
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+      },
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        size:   50,
       },
     ],
-  },
-}));
+    hooks: {
+      setCursor: [
+        (u) => {
+          const idx = u.cursor.idx;
+          if (idx == null) {
+            view.clearCursorIfNotPinned();
+            return;
+          }
+          if (view.cursorPinned) return;
+          const t = u.data[0][idx];
+          if (typeof t === 'number') view.setCursor(t);
+        },
+      ],
+    },
+  };
+});
 
 const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
@@ -145,18 +236,24 @@ const { pinnedPx } = useChartPinnedCursor({ plot, host: hostRef });
 function resetZoom() { plot.resetZoom(); }
 
 const fitWindowText = computed(() => {
-  const b = built.value;
+  const b = activeBuilt.value;
   if (!b) return '';
   const t = b.inputs.time;
-  return `${t[0].toFixed(1)}–${t[t.length - 1].toFixed(1)}s · ${t.length.toLocaleString()} samples`;
+  const off = activeAlign.offsetSec.value;
+  // Surface the window in session time so it matches the chart x-axis.
+  return `${(t[0] + off).toFixed(1)}–${(t[t.length - 1] + off).toFixed(1)}s · ${t.length.toLocaleString()} samples`;
 });
 
 const { cursorTime } = storeToRefs(view);
 const liveSamples = computed<CursorSample[]>(() => {
-  const result = fitResult.value;
-  const b = built.value;
+  const result = activeFit.value;
+  const b = activeBuilt.value;
   if (!result || !b || cursorTime.value === null) return [];
-  const idx = nearestTimeIndex(b.inputs.time, cursorTime.value);
+  // Project session cursor to active log's local time before indexing
+  // the fit-window arrays.
+  const localCursor = activeAlign.alignedCursor.value;
+  if (localCursor === null) return [];
+  const idx = nearestTimeIndex(b.inputs.time, localCursor);
   if (idx === null) return [];
   const gps = b.inputs.gpsSpeed[idx];
   const pred = result.predicted[idx];
@@ -186,21 +283,31 @@ useCursorSamples({ sourceKey: 'airspeed', samples: liveSamples });
 
 const pendingMessage = computed(() => {
   if (isHydrating.value) return 'hydrating airspeed-fit fields…';
-  const throttle = fields.value.get('rcCommand[3]');
-  const vbat     = fields.value.get('vbatLatest');
-  const gps      = fields.value.get('gps:GPS_speed');
+  const throttle = activeLog.fields.value.get('rcCommand[3]');
+  const vbat     = activeLog.fields.value.get('vbatLatest');
+  const gps      = activeLog.fields.value.get('gps:GPS_speed');
   const missing: string[] = [];
   if (!throttle?.length) missing.push('rcCommand[3] (throttle)');
   if (!vbat?.length)     missing.push('vbatLatest');
   if (!gps?.length) {
-    if (gpsTimeSec.value.length === 0) {
+    if (activeLog.gpsTimeSec.value.length === 0) {
       return 'no GPS frames in this log — log either has no GPS module or GPS never locked';
     }
     missing.push('gps:GPS_speed');
   }
-  if (gpsTimeSec.value.length < 2) return 'GPS axis has < 2 samples — cannot fit';
+  if (activeLog.gpsTimeSec.value.length < 2) return 'GPS axis has < 2 samples — cannot fit';
   if (missing.length > 0) return `missing required fields: ${missing.join(', ')}`;
   return 'preparing fit…';
+});
+
+const multiLogNote = computed(() => {
+  const n = visibleEntries.value.length;
+  if (n <= 1) return '';
+  const drawing = allFits.value.length;
+  if (drawing < n) {
+    return `${drawing} of ${n} logs · session time · ${n - drawing} dropped (no GPS / missing fields) · params + readout show active log only`;
+  }
+  return `${n} logs · session time · params + readout show active log only · traces clamp-extend outside each log's fit window`;
 });
 </script>
 
@@ -214,36 +321,39 @@ const pendingMessage = computed(() => {
           Airspeed estimator &middot; BASIC model fit
         </div>
         <div class="font-mono text-[10.5px] text-bp-ink-3 mt-px">
-          predicted vs GPS 3D speed
-          <template v-if="fitResult"> &middot; fit window {{ fitWindowText }}</template>
-          <template v-if="built?.pitchFromFallback">
-            &middot;
-            <span class="text-bp-warn">no pitch field — level flight assumed</span>
+          <template v-if="multiLogNote">{{ multiLogNote }}</template>
+          <template v-else>
+            predicted vs GPS 3D speed
+            <template v-if="activeFit"> &middot; fit window {{ fitWindowText }}</template>
+            <template v-if="activeBuilt?.pitchFromFallback">
+              &middot;
+              <span class="text-bp-warn">no pitch field — level flight assumed</span>
+            </template>
           </template>
         </div>
       </div>
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
-        <div v-if="fitResult" class="flex gap-3 items-baseline">
+        <div v-if="activeFit" class="flex gap-3 items-baseline">
           <div class="text-right">
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">delay ms</div>
-            <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(fitResult.params.delayMs) }}</div>
+            <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(activeFit.params.delayMs) }}</div>
           </div>
           <div class="text-right">
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">gravity %</div>
-            <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(fitResult.params.gravityPct) }}</div>
+            <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(activeFit.params.gravityPct) }}</div>
           </div>
           <div class="text-right">
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">max V&times;100</div>
-            <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(fitResult.params.maxVoltageX100) }}</div>
+            <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(activeFit.params.maxVoltageX100) }}</div>
           </div>
           <div class="text-right">
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">R&sup2;</div>
-            <div class="font-mono text-[13px] text-bp-ink">{{ fitResult.rSquared.toFixed(3) }}</div>
+            <div class="font-mono text-[13px] text-bp-ink">{{ activeFit.rSquared.toFixed(3) }}</div>
           </div>
           <div class="text-right">
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">RMS</div>
-            <div class="font-mono text-[13px] text-bp-ink">{{ fitResult.rmsResidual.toFixed(1) }}</div>
+            <div class="font-mono text-[13px] text-bp-ink">{{ activeFit.rmsResidual.toFixed(1) }}</div>
           </div>
         </div>
 
@@ -291,8 +401,8 @@ const pendingMessage = computed(() => {
           gps
         </span>
       </div>
-      <div v-if="fitResult" class="font-mono text-bp-ink-3">
-        {{ fitResult.iterations }} iter &middot; {{ fitResult.converged ? 'converged' : 'iter cap' }}
+      <div v-if="activeFit" class="font-mono text-bp-ink-3">
+        {{ activeFit.iterations }} iter &middot; {{ activeFit.converged ? 'converged' : 'iter cap' }}
       </div>
     </footer>
   </section>

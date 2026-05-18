@@ -7,22 +7,40 @@
 // click to show/hide a term, shift-click to solo (show only that term;
 // shift-click again to restore all).
 //
-// Missing terms (e.g. axisD/axisS on yaw — wings commonly log neither)
-// are skipped: no chip, no chart series, share counted as 0. Shared
-// pinned cursor overlay arrives via useChartPinnedCursor, same as the
-// other time-domain panels.
+// M1.7.1 multi-log: chart x is SESSION time; each visible log
+// contributes its present PIDFS terms + reference traces (setpoint,
+// gyro), each tinted toward the log's family color. Chip toggles
+// affect EVERY visible log uniformly via `toggleSeriesForAllLogs` —
+// soloing "P" hides every other present term across all logs. Mean-
+// abs share strip + cursor readout remain anchored to the active
+// log (flip the eye to inspect another log's term balance). Missing
+// terms per log (e.g. axisD/axisS on yaw — wings commonly log neither)
+// are skipped per-log: that log just doesn't contribute that trace,
+// but other logs may.
 
-import { computed, onMounted, ref, watch, watchEffect } from 'vue';
+import { computed, ref, watchEffect } from 'vue';
 import { storeToRefs } from 'pinia';
 import type { AlignedData, Options, Series } from 'uplot';
 
+import { useSessionStore, type LogState } from '@/stores/session';
 import { useActiveLog } from '@/composables/useActiveLog';
+import { useAlignedTime } from '@/composables/useAlignedTime';
 import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
 import { useCursorSamples } from '@/composables/useCursorSamples';
 import { nearestTimeIndex } from '@/lib/dtype';
 import { pidfsShares, type PIDFSArrays, type PIDFSTerm } from '@/lib/pidfs';
+import {
+  resampleOntoRef,
+  sessionTimeRangeFn,
+  useSessionRefTime,
+} from '@/lib/sessionTime';
+import {
+  familyForIndex,
+  tintTowardFamily,
+  type FamilySpec,
+} from '@/lib/logColors';
 
 type AxisId = 0 | 1 | 2;
 type AxisSpec = {
@@ -40,15 +58,9 @@ const AXES: AxisSpec[] = [
 type TermSpec = {
   term: PIDFSTerm;
   color: string;
-  /** Tooltip-ish hover description on the chip. */
   hint: string;
 };
 
-// Per-term colors — five distinct strokes against Blueprint navy.
-// P leads with accent (cool blue, "primary"), I in ink-2 (calm light),
-// D in stamp/coral (derivative spikiness), F in ok-green (calm
-// feedforward), S in warn-amber (saturation / static gain — the term
-// most likely to surprise a quad pilot moving to wings).
 const TERM_SPECS: TermSpec[] = [
   { term: 'P', color: '#7ec8ff', hint: 'Proportional to error' },
   { term: 'I', color: '#b6c7e0', hint: 'Integral of error over time' },
@@ -57,12 +69,6 @@ const TERM_SPECS: TermSpec[] = [
   { term: 'S', color: '#ffc46a', hint: 'Static / saturation gain (PIDFS)' },
 ];
 
-// Reference traces — what the PID loop is chasing (setpoint, the
-// target) and responding to (gyro, the actual). Overlaid on a
-// secondary deg/s y-axis so the PID-term scale doesn't get squashed
-// by gyro's larger magnitude. Phase delay reads off the
-// setpoint-to-gyro time-shift directly; tracking error reads off
-// their separation.
 type ReferenceId = 'setpoint' | 'gyro';
 type ReferenceSpec = {
   id: ReferenceId;
@@ -70,12 +76,7 @@ type ReferenceSpec = {
   field: (axis: AxisId) => string;
   color: string;
   hint: string;
-  /** Cursor-readout tone closest to the chart stroke. */
   tone: CursorSample['tone'];
-  /** Optional uPlot dash pattern `[dashPx, gapPx]`. Setpoint is
-   *  dotted to read as "the commanded value" — the convention
-   *  every reference scope (PIDtoolbox, PIDscope, BBL Explorer)
-   *  uses for the same reason. */
   dash?: number[];
 };
 const REFERENCE_SPECS: ReferenceSpec[] = [
@@ -92,10 +93,6 @@ const REFERENCE_SPECS: ReferenceSpec[] = [
     id: 'gyro',
     short: 'gyr',
     field: (a) => `gyroADC[${a}]`,
-    // Magenta-violet — deliberately outside the PID color family
-    // (P-blue / I-ink / D-coral / F-mint / S-amber) so the "actual
-    // measurement that the loop is reacting to" reads as its own
-    // visual category, not just another PID-adjacent trace.
     color: '#d97bc8',
     hint: 'Gyro · the actual rate the PIDs are reacting to (deg/s)',
     tone: 'stamp',
@@ -108,11 +105,8 @@ const COLORS = {
   dim:   '#4a5e7e',
 } as const;
 
-/** Symmetric-around-zero range for both y-scales. Used so the PID
- *  (left) and deg/s (right) zero lines land on the same y-pixel,
- *  which is the whole point of overlaying reference traces on PID
- *  contributions — phase/shape comparison reads cleanly only if
- *  the baselines align. */
+/** Symmetric-around-zero range — keeps PID (y) + deg/s (degs) zero
+ *  lines on the same y-pixel so phase/shape comparison reads clean. */
 function symmetric(min: number, max: number): [number, number] {
   const abs = Math.max(Math.abs(min), Math.abs(max)) || 1;
   return [-abs, abs];
@@ -121,124 +115,203 @@ function symmetric(min: number, max: number): [number, number] {
 const selectedAxis = ref<AxisId>(0);
 const axisSpec = computed(() => AXES[selectedAxis.value]);
 
-const logStore = useActiveLog();
+const session = useSessionStore();
 const view = useViewStore();
-const { time, fields, hydrating, activeId } = logStore;
-// hiddenSeries must be destructured BEFORE the opts computed below,
-// because opts reads isHidden() (axes[2].show), and any sync read of
-// opts.value during setup would TDZ on hiddenSeries otherwise.
+const activeLog = useActiveLog();
 const { hiddenSeries } = storeToRefs(view);
 
 const fieldNameFor = (term: PIDFSTerm, axis: AxisId) => `axis${term}[${axis}]`;
 
-const requestedFieldNames = computed(() => [
-  ...TERM_SPECS.map((t) => fieldNameFor(t.term, selectedAxis.value)),
-  ...REFERENCE_SPECS.map((r) => r.field(selectedAxis.value)),
-]);
-
-async function hydrateForAxis(id: AxisId) {
-  // ensureFields tolerates missing-in-log entries (they come back empty);
-  // we just request the full PIDFS quintet + the two reference traces
-  // and surface whichever lands.
-  await logStore.ensureFields([
-    ...TERM_SPECS.map((t) => fieldNameFor(t.term, id)),
-    ...REFERENCE_SPECS.map((r) => r.field(id)),
-  ]);
+interface LogEntry {
+  log: LogState;
+  family: FamilySpec;
+  hidden: boolean;
 }
 
-onMounted(() => hydrateForAxis(selectedAxis.value));
-watch(selectedAxis, hydrateForAxis);
-
-// Per-term presence after hydration. A term is "present" if its
-// hydrated array has at least one sample. Missing terms get skipped
-// in the chip row and the chart series list.
-const present = computed<Record<PIDFSTerm, boolean>>(() => {
-  const out = { P: false, I: false, D: false, F: false, S: false };
-  for (const spec of TERM_SPECS) {
-    const arr = fields.value.get(fieldNameFor(spec.term, selectedAxis.value));
-    if (arr && arr.length > 0) out[spec.term] = true;
+const logEntries = computed<LogEntry[]>(() => {
+  const out: LogEntry[] = [];
+  let idx = 0;
+  for (const log of session.logs.values()) {
+    out.push({
+      log,
+      family: familyForIndex(idx),
+      hidden: view.isLogHidden(log.id),
+    });
+    idx += 1;
   }
   return out;
 });
 
-const presentTerms = computed(() => TERM_SPECS.filter((t) => present.value[t.term]));
+const visibleEntries = computed(() => logEntries.value.filter((e) => !e.hidden));
+const visibleLogIds = computed(() => visibleEntries.value.map((e) => e.log.id));
 
-const presentRefs = computed(() =>
-  REFERENCE_SPECS.filter((r) => {
-    const arr = fields.value.get(r.field(selectedAxis.value));
-    return arr && arr.length > 0;
-  }),
-);
+// Hydrate PIDFS quintet + setpoint/gyro across every loaded log for
+// the selected axis. ensureFields tolerates missing-in-log entries.
+watchEffect(() => {
+  const axis = selectedAxis.value;
+  const wants = [
+    ...TERM_SPECS.map((t) => fieldNameFor(t.term, axis)),
+    ...REFERENCE_SPECS.map((r) => r.field(axis)),
+  ];
+  for (const { log } of logEntries.value) {
+    session.ensureFields(log.id, wants).catch(() => {});
+  }
+});
 
-const termArrays = computed<PIDFSArrays>(() => {
+// Union of present terms across all visible logs. A term renders a
+// chip if ANY visible log has it; per-log absence just skips that
+// log's series for that term.
+const allPresent = computed<Record<PIDFSTerm, boolean>>(() => {
+  const out: Record<PIDFSTerm, boolean> = { P: false, I: false, D: false, F: false, S: false };
+  const axis = selectedAxis.value;
+  for (const { log } of visibleEntries.value) {
+    for (const spec of TERM_SPECS) {
+      const arr = log.fields.get(fieldNameFor(spec.term, axis));
+      if (arr && arr.length > 0) out[spec.term] = true;
+    }
+  }
+  return out;
+});
+
+const presentTerms = computed(() => TERM_SPECS.filter((t) => allPresent.value[t.term]));
+
+const allPresentRefs = computed<Record<ReferenceId, boolean>>(() => {
+  const out: Record<ReferenceId, boolean> = { setpoint: false, gyro: false };
+  const axis = selectedAxis.value;
+  for (const { log } of visibleEntries.value) {
+    for (const spec of REFERENCE_SPECS) {
+      const arr = log.fields.get(spec.field(axis));
+      if (arr && arr.length > 0) out[spec.id] = true;
+    }
+  }
+  return out;
+});
+
+const presentRefs = computed(() => REFERENCE_SPECS.filter((r) => allPresentRefs.value[r.id]));
+
+// Active log's term arrays — used for the mean-abs share strip and
+// the cursor readout. Other logs' shares aren't surfaced at N≥2
+// (chip strip would explode); flip the eye to inspect another log.
+const activeTermArrays = computed<PIDFSArrays>(() => {
   const out: PIDFSArrays = {};
+  const axis = selectedAxis.value;
   for (const t of presentTerms.value) {
-    out[t.term] = fields.value.get(fieldNameFor(t.term, selectedAxis.value));
+    const arr = activeLog.fields.value.get(fieldNameFor(t.term, axis));
+    if (arr && arr.length > 0) out[t.term] = arr;
   }
   return out;
 });
 
-const refArrays = computed<Record<ReferenceId, Float32Array | undefined>>(() => {
-  const out: Record<ReferenceId, Float32Array | undefined> = {
-    setpoint: undefined,
-    gyro: undefined,
-  };
+const activeRefArrays = computed<Record<ReferenceId, Float32Array | undefined>>(() => {
+  const out: Record<ReferenceId, Float32Array | undefined> = { setpoint: undefined, gyro: undefined };
+  const axis = selectedAxis.value;
   for (const r of presentRefs.value) {
-    out[r.id] = fields.value.get(r.field(selectedAxis.value));
+    const arr = activeLog.fields.value.get(r.field(axis));
+    if (arr && arr.length > 0) out[r.id] = arr;
   }
   return out;
 });
 
-const shares = computed(() => pidfsShares(termArrays.value));
+const shares = computed(() => pidfsShares(activeTermArrays.value));
 
-const isHydrating = computed(() =>
-  requestedFieldNames.value.some((n) => hydrating.value.has(n)),
+const isHydrating = computed(() => {
+  const axis = selectedAxis.value;
+  const wants = [
+    ...TERM_SPECS.map((t) => fieldNameFor(t.term, axis)),
+    ...REFERENCE_SPECS.map((r) => r.field(axis)),
+  ];
+  return wants.some((n) => activeLog.hydrating.value.has(n));
+});
+
+const ready = computed(
+  () => activeLog.time.value.length > 0 && presentTerms.value.length > 0,
 );
 
-const ready = computed(() => time.value.length > 0 && presentTerms.value.length > 0);
+const refTime = useSessionRefTime();
+const activeAlign = useAlignedTime(() => activeLog.activeId.value);
 
-// --- chart data + opts ---
+// --- per-log traces ---
+
+interface LogTraceItem {
+  kind: 'term' | 'ref';
+  term?: PIDFSTerm;
+  refId?: ReferenceId;
+  field: string;
+  baseColor: string;
+  arr: Float32Array;
+}
+
+interface LogTraceBundle {
+  entry: LogEntry;
+  items: LogTraceItem[];
+}
+
+const allTraces = computed<LogTraceBundle[]>(() => {
+  const out: LogTraceBundle[] = [];
+  const axis = selectedAxis.value;
+  for (const entry of visibleEntries.value) {
+    const items: LogTraceItem[] = [];
+    for (const spec of presentTerms.value) {
+      const field = fieldNameFor(spec.term, axis);
+      const arr = entry.log.fields.get(field);
+      if (!arr || arr.length === 0) continue;
+      items.push({ kind: 'term', term: spec.term, field, baseColor: spec.color, arr });
+    }
+    for (const spec of presentRefs.value) {
+      const field = spec.field(axis);
+      const arr = entry.log.fields.get(field);
+      if (!arr || arr.length === 0) continue;
+      items.push({ kind: 'ref', refId: spec.id, field, baseColor: spec.color, arr });
+    }
+    if (items.length > 0) out.push({ entry, items });
+  }
+  return out;
+});
 
 const data = computed<AlignedData>(() => {
-  if (!ready.value) {
+  if (!ready.value || refTime.value.length === 0 || allTraces.value.length === 0) {
     return [new Float32Array(0)] as unknown as AlignedData;
   }
-  const termArrs = presentTerms.value.map((t) => termArrays.value[t.term]!);
-  const refArrs  = presentRefs.value.map((r) => refArrays.value[r.id]!);
-  return [time.value, ...termArrs, ...refArrs] as unknown as AlignedData;
+  const series: Float32Array[] = [];
+  for (const t of allTraces.value) {
+    for (const item of t.items) {
+      series.push(resampleOntoRef(t.entry.log, refTime.value, item.arr));
+    }
+  }
+  return [refTime.value, ...series] as unknown as AlignedData;
 });
 
 const opts = computed<Options>(() => {
-  const series: Series[] = [
-    {},
-    ...presentTerms.value.map((t) => ({
-      label:  t.term,
-      stroke: t.color,
-      width:  1.1,
-    })),
-    ...presentRefs.value.map((r) => ({
-      label:  r.short,
-      stroke: r.color,
-      width:  1.1,
-      // Secondary y-axis scale so deg/s magnitudes don't squash the
-      // PID-term y-axis on the left.
-      scale:  'degs',
-      ...(r.dash ? { dash: r.dash } : {}),
-    })),
-  ];
+  const series: Series[] = [{}];
+  for (const t of allTraces.value) {
+    const fam = t.entry.family;
+    for (const item of t.items) {
+      const tinted = tintTowardFamily(item.baseColor, fam);
+      if (item.kind === 'term') {
+        series.push({
+          label: `${t.entry.log.name} ${item.term}`,
+          stroke: tinted,
+          width: 1.1,
+        });
+      } else {
+        const refSpec = REFERENCE_SPECS.find((r) => r.id === item.refId)!;
+        series.push({
+          label: `${t.entry.log.name} ${refSpec.short}`,
+          stroke: tinted,
+          width: 1.1,
+          scale: 'degs',
+          ...(refSpec.dash ? { dash: refSpec.dash } : {}),
+        });
+      }
+    }
+  }
+  const anyRefVisible = presentRefs.value.some((r) => !isChipHidden(r.id));
   return {
     width: 600,
     height: 240,
     legend: { show: false },
     scales: {
-      x: { time: false },
-      // Both y-scales force-symmetric around zero so the zero line on
-      // the PID scale (left) and the deg/s scale (right) render at the
-      // same y-pixel. Without this, uPlot auto-fits each scale to its
-      // own data range, the two zeros drift apart, and the gyro vs PID
-      // shape comparison reads as a vertical offset that isn't really
-      // there. Padding stays implicit in `Math.max(...) || 1` so an
-      // all-zero range doesn't collapse to [0, 0].
+      x: { time: false, range: sessionTimeRangeFn },
       y:    { auto: true, range: (_u, min, max) => symmetric(min, max) },
       degs: { auto: true, range: (_u, min, max) => symmetric(min, max) },
     },
@@ -260,14 +333,9 @@ const opts = computed<Options>(() => {
         grid:   { stroke: COLORS.line, width: 0.5 },
         ticks:  { stroke: COLORS.line, width: 0.5 },
         font:   '10px ui-monospace, Menlo, Consolas, monospace',
-        // Must match TimeBar's PLOT_AXIS_LEFT_PX so the time-bar cursor
-        // visually aligns with this chart's cursor at the same time t.
         size:   50,
       },
       {
-        // Secondary right-side axis for setpoint/gyro reference traces
-        // (deg/s). Dimmer stroke so it doesn't compete with the
-        // primary PID axis on the left. Hidden when no ref is visible.
         scale:  'degs',
         side:   1,
         stroke: COLORS.dim,
@@ -275,7 +343,7 @@ const opts = computed<Options>(() => {
         ticks:  { stroke: COLORS.line, width: 0.5 },
         font:   '10px ui-monospace, Menlo, Consolas, monospace',
         size:   42,
-        show:   presentRefs.value.some((r) => !isHidden(r.id)),
+        show:   anyRefVisible,
       },
     ],
     hooks: {
@@ -299,16 +367,8 @@ const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
 const { pinnedPx } = useChartPinnedCursor({ plot, host: hostRef });
 
-// --- per-term toggle (click = toggle, shift-click = solo) ---
-//
-// Uses the same view.hiddenSeries set as ServoPanel — keyed by full
-// field name (axisP[0] etc.), so different axes / panels don't
-// collide. Survives tab switches.
+// --- chip toggles (now act across all visible logs uniformly) ---
 
-// Shared visibility key for both PID terms (axisP[0] etc.) and the
-// reference traces (setpoint[0], gyroADC[0]). One Set, one helper —
-// the keys are field names so they don't collide across panels or
-// axes.
 function fieldKeyFor(id: PIDFSTerm | ReferenceId): string {
   if (id === 'setpoint' || id === 'gyro') {
     const r = REFERENCE_SPECS.find((s) => s.id === id)!;
@@ -317,81 +377,71 @@ function fieldKeyFor(id: PIDFSTerm | ReferenceId): string {
   return fieldNameFor(id, selectedAxis.value);
 }
 
-function isHidden(id: PIDFSTerm | ReferenceId): boolean {
-  if (!activeId.value) return false;
-  return view.isSeriesHidden(activeId.value, fieldKeyFor(id));
-}
-
-/** Compose the active-log-prefixed key for direct hiddenSeries
- *  manipulation. The solo path needs raw key access (multi-key
- *  flip in one Set replacement) so the helpers don't suffice. */
-function prefixedKey(field: string): string {
-  return `${activeId.value}:${field}`;
+/** Chip is "hidden" if hidden across EVERY visible log — matches the
+ *  ServoPanel chip pattern. Mixed state (some show, some hide) reads
+ *  as visible so the toggle still does something sensible. */
+function isChipHidden(id: PIDFSTerm | ReferenceId): boolean {
+  const ids = visibleLogIds.value;
+  if (ids.length === 0) return false;
+  return view.isSeriesHiddenForAllLogs(fieldKeyFor(id), ids);
 }
 
 function onChipClick(term: PIDFSTerm, ev: MouseEvent) {
-  if (!activeId.value) return;
-  const myField = fieldNameFor(term, selectedAxis.value);
+  const axis = selectedAxis.value;
+  const myField = fieldNameFor(term, axis);
+  const ids = visibleLogIds.value;
+  if (ids.length === 0) return;
   if (ev.shiftKey) {
-    // Solo: hide every present term except this one. If we're already
-    // soloed on this term, restore all. Refs are unaffected by solo —
-    // they're a separate visual layer.
-    const otherFields = presentTerms.value
-      .filter((t) => t.term !== term)
-      .map((t) => fieldNameFor(t.term, selectedAxis.value));
-    const myKey = prefixedKey(myField);
-    const otherKeys = otherFields.map(prefixedKey);
-    const alreadySoloed =
-      !hiddenSeries.value.has(myKey) &&
-      otherKeys.every((k) => hiddenSeries.value.has(k));
+    // Solo across all visible logs: this term visible everywhere,
+    // every OTHER present term hidden everywhere. Second shift-click
+    // restores all term visibility (refs untouched).
+    const others = TERM_SPECS
+      .filter((t) => allPresent.value[t.term] && t.term !== term)
+      .map((t) => fieldNameFor(t.term, axis));
+    const key = (id: string, f: string) => `${id}:${f}`;
+    const alreadySoloed = ids.every((id) =>
+      !view.isSeriesHidden(id, myField) &&
+      others.every((f) => view.isSeriesHidden(id, f)),
+    );
     const next = new Set(hiddenSeries.value);
-    if (alreadySoloed) {
-      // restore: clear hidden for this axis's terms
-      for (const k of [myKey, ...otherKeys]) next.delete(k);
-    } else {
-      next.delete(myKey);
-      for (const k of otherKeys) next.add(k);
+    for (const id of ids) {
+      if (alreadySoloed) {
+        next.delete(key(id, myField));
+        for (const f of others) next.delete(key(id, f));
+      } else {
+        next.delete(key(id, myField));
+        for (const f of others) next.add(key(id, f));
+      }
     }
     view.hiddenSeries = next;
   } else {
-    view.toggleSeries(activeId.value, myField);
+    view.toggleSeriesForAllLogs(myField, ids);
   }
 }
 
 function onRefChipClick(id: ReferenceId) {
-  // Refs don't participate in shift-solo — they're reference overlays,
-  // not PIDFS contributors. Simple click-to-toggle.
-  if (!activeId.value) return;
-  view.toggleSeries(activeId.value, fieldKeyFor(id));
+  const ids = visibleLogIds.value;
+  if (ids.length === 0) return;
+  view.toggleSeriesForAllLogs(fieldKeyFor(id), ids);
 }
 
 function syncSeriesVisibility() {
   const u = plot.instance();
   if (!u) return;
   let seriesIdx = 1;
-  for (const t of presentTerms.value) {
-    u.setSeries(seriesIdx++, { show: !isHidden(t.term) });
-  }
-  for (const r of presentRefs.value) {
-    u.setSeries(seriesIdx++, { show: !isHidden(r.id) });
+  for (const t of allTraces.value) {
+    for (const item of t.items) {
+      const show = !view.isSeriesHidden(t.entry.log.id, item.field);
+      if (u.series[seriesIdx] && u.series[seriesIdx].show !== show) {
+        u.setSeries(seriesIdx, { show });
+      }
+      seriesIdx += 1;
+    }
   }
 }
 
-// watchEffect auto-tracks every reactive read inside syncSeriesVisibility
-// (presentTerms/Refs, hiddenSeries via isHidden, activeId via isHidden,
-// plot.updateCount via the explicit touch below). This handles every
-// state change that could affect series visibility:
-//   · chip click → hiddenSeries
-//   · eye toggle → activeId (and thus isHidden)
-//   · axis switch → presentTerms / presentRefs
-//   · uPlot rebuild on opts/data change → plot.updateCount (default
-//     show=true on every new series; need to re-apply visibility)
 watchEffect(() => {
   if (!plot.ready.value) return;
-  // Explicit dep so we re-fire after uPlot rebuilds, which reset
-  // every series.show to true. Skipped when updateCount isn't
-  // exposed (defensive — the cast keeps TS happy across composable
-  // versions).
   void (plot as { updateCount?: { value: number } }).updateCount?.value;
   syncSeriesVisibility();
 });
@@ -404,8 +454,8 @@ function resetZoom() {
   plot.resetZoom();
 }
 
-const allHidden = computed(() =>
-  presentTerms.value.length > 0 && presentTerms.value.every((t) => isHidden(t.term)),
+const allHidden = computed(
+  () => presentTerms.value.length > 0 && presentTerms.value.every((t) => isChipHidden(t.term)),
 );
 
 const dominantColor = computed(() => {
@@ -414,13 +464,8 @@ const dominantColor = computed(() => {
   return TERM_SPECS.find((t) => t.term === d)!.color;
 });
 
-// --- live cursor sample contributions ---
-//
-// Maps each present term's value at cursor.t into a CursorSample row.
-// Hidden terms are excluded (matches what's actually on the chart).
-// Term tones use the closest design-token mapping; the chart's exact
-// colors aren't reproducible through the limited tone palette but the
-// readout intent is clear.
+// --- live cursor sample contributions (active log only) ---
+
 const TERM_TONE: Record<PIDFSTerm, CursorSample['tone']> = {
   P: 'accent',
   I: 'ink',
@@ -432,28 +477,47 @@ const TERM_TONE: Record<PIDFSTerm, CursorSample['tone']> = {
 const { cursorTime } = storeToRefs(view);
 const liveSamples = computed<CursorSample[]>(() => {
   if (!ready.value || cursorTime.value === null) return [];
-  const idx = nearestTimeIndex(time.value, cursorTime.value);
+  // Project session cursor to active log's local axis.
+  const localCursor = activeAlign.alignedCursor.value;
+  if (localCursor === null) return [];
+  const idx = nearestTimeIndex(activeLog.time.value, localCursor);
   if (idx === null) return [];
   const ax = axisSpec.value.label;
   const termRows = presentTerms.value
-    .filter((t) => !isHidden(t.term))
-    .map<CursorSample>((t) => ({
-      label: `${t.term}${axisSpec.value.short}`,
-      value: (termArrays.value[t.term]![idx] as number).toFixed(0),
-      tone: TERM_TONE[t.term],
-      hint: `${t.term}-term · ${ax} — ${t.hint}`,
-    }));
+    .filter((t) => !isChipHidden(t.term))
+    .map<CursorSample | null>((t) => {
+      const arr = activeTermArrays.value[t.term];
+      if (!arr) return null;
+      return {
+        label: `${t.term}${axisSpec.value.short}`,
+        value: (arr[idx] as number).toFixed(0),
+        tone: TERM_TONE[t.term],
+        hint: `${t.term}-term · ${ax} — ${t.hint}`,
+      };
+    })
+    .filter((r): r is CursorSample => r !== null);
   const refRows = presentRefs.value
-    .filter((r) => !isHidden(r.id))
-    .map<CursorSample>((r) => ({
-      label: `${r.short}${axisSpec.value.short}`,
-      value: (refArrays.value[r.id]![idx] as number).toFixed(0),
-      tone: r.tone,
-      hint: `${ax} — ${r.hint}`,
-    }));
+    .filter((r) => !isChipHidden(r.id))
+    .map<CursorSample | null>((r) => {
+      const arr = activeRefArrays.value[r.id];
+      if (!arr) return null;
+      return {
+        label: `${r.short}${axisSpec.value.short}`,
+        value: (arr[idx] as number).toFixed(0),
+        tone: r.tone,
+        hint: `${ax} — ${r.hint}`,
+      };
+    })
+    .filter((r): r is CursorSample => r !== null);
   return [...termRows, ...refRows];
 });
 useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
+
+const multiLogNote = computed(() => {
+  const n = visibleEntries.value.length;
+  if (n <= 1) return 'click to toggle · shift-click to solo';
+  return `${n} logs · session time · chips toggle across all logs · shares + readout show active log`;
+});
 </script>
 
 <template>
@@ -464,7 +528,7 @@ useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
           PID contribution · {{ axisSpec.label.toLowerCase() }} axis
         </div>
         <div class="font-mono text-[10.5px] text-bp-ink-3 mt-px">
-          click to toggle · shift-click to solo
+          {{ multiLogNote }}
         </div>
       </div>
 
@@ -476,17 +540,17 @@ useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
             type="button"
             class="flex items-center gap-1.5 px-2 py-[3px] font-mono text-[11px] font-semibold border cursor-pointer transition-colors"
             :style="{
-              background: isHidden(t.term) ? 'transparent' : `${t.color}1f`,
-              borderColor: isHidden(t.term) ? 'var(--color-bp-line-2)' : t.color,
-              color: isHidden(t.term) ? 'var(--color-bp-ink-3)' : t.color,
+              background: isChipHidden(t.term) ? 'transparent' : `${t.color}1f`,
+              borderColor: isChipHidden(t.term) ? 'var(--color-bp-line-2)' : t.color,
+              color: isChipHidden(t.term) ? 'var(--color-bp-ink-3)' : t.color,
             }"
-            :title="t.hint + (isHidden(t.term) ? ' · hidden' : '')"
-            :aria-pressed="!isHidden(t.term)"
+            :title="t.hint + (isChipHidden(t.term) ? ' · hidden' : '')"
+            :aria-pressed="!isChipHidden(t.term)"
             @click="(ev) => onChipClick(t.term, ev)"
           >
             <span
               class="inline-block w-2.5 h-0.5"
-              :style="{ background: isHidden(t.term) ? 'var(--color-bp-line-2)' : t.color }"
+              :style="{ background: isChipHidden(t.term) ? 'var(--color-bp-line-2)' : t.color }"
             />
             {{ t.term }}
           </button>
@@ -505,17 +569,17 @@ useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
             type="button"
             class="flex items-center gap-1.5 px-2 py-[3px] font-mono text-[11px] font-semibold border cursor-pointer transition-colors"
             :style="{
-              background: isHidden(r.id) ? 'transparent' : `${r.color}1f`,
-              borderColor: isHidden(r.id) ? 'var(--color-bp-line-2)' : r.color,
-              color: isHidden(r.id) ? 'var(--color-bp-ink-3)' : r.color,
+              background: isChipHidden(r.id) ? 'transparent' : `${r.color}1f`,
+              borderColor: isChipHidden(r.id) ? 'var(--color-bp-line-2)' : r.color,
+              color: isChipHidden(r.id) ? 'var(--color-bp-ink-3)' : r.color,
             }"
-            :title="r.hint + (isHidden(r.id) ? ' · hidden' : '')"
-            :aria-pressed="!isHidden(r.id)"
+            :title="r.hint + (isChipHidden(r.id) ? ' · hidden' : '')"
+            :aria-pressed="!isChipHidden(r.id)"
             @click="onRefChipClick(r.id)"
           >
             <span
               class="inline-block w-2.5 h-0.5"
-              :style="{ background: isHidden(r.id) ? 'var(--color-bp-line-2)' : r.color }"
+              :style="{ background: isChipHidden(r.id) ? 'var(--color-bp-line-2)' : r.color }"
             />
             {{ r.short }}
           </button>
@@ -574,14 +638,14 @@ useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
       </div>
     </div>
 
-    <!-- per-term share strip -->
+    <!-- per-term share strip (active log only) -->
     <footer
       v-if="ready && shares.totalAbs > 0"
       class="border-t border-bp-line px-3 py-2"
     >
       <div class="flex justify-between items-baseline mb-1.5">
         <span class="font-sans text-[9px] tracking-[0.22em] uppercase font-bold text-bp-ink-3">
-          mean-abs share
+          mean-abs share · active log
         </span>
         <span class="font-mono text-[10.5px] text-bp-ink-3">
           dominant ·
@@ -597,8 +661,8 @@ useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
           class="h-full"
           :style="{
             width: `${(shares[t.term] * 100).toFixed(2)}%`,
-            background: isHidden(t.term) ? 'var(--color-bp-line-2)' : t.color,
-            opacity: isHidden(t.term) ? 0.4 : 1,
+            background: isChipHidden(t.term) ? 'var(--color-bp-line-2)' : t.color,
+            opacity: isChipHidden(t.term) ? 0.4 : 1,
           }"
           :title="`${t.term} · ${(shares[t.term] * 100).toFixed(1)}%`"
         />
@@ -607,7 +671,7 @@ useCursorSamples({ sourceKey: 'pid', samples: liveSamples });
         <span
           v-for="t in presentTerms"
           :key="t.term"
-          :style="{ color: isHidden(t.term) ? 'var(--color-bp-dim)' : t.color }"
+          :style="{ color: isChipHidden(t.term) ? 'var(--color-bp-dim)' : t.color }"
         >
           {{ t.term }} {{ (shares[t.term] * 100).toFixed(1) }}%
         </span>

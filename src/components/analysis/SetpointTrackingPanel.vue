@@ -1,32 +1,44 @@
 <script setup lang="ts">
 // Tracking panel — gyro vs setpoint overlay for a single axis.
 //
-// What's real here: every sample of the hydrated `gyroADC[i]` /
-// `setpoint[i]` field arrays goes straight into uPlot, no decimation.
-// The chart-rendering-fidelity invariant is the whole reason we use
-// uPlot — see `project-chart-rendering-fidelity` memory if tempted to
-// downsample upstream.
+// M1.7.1 multi-log: chart x is SESSION time; each visible log
+// contributes a (setpoint, gyro) pair, tinted toward its family color.
+// Per-log data is resampled onto the longest visible aligned-time
+// axis via `resampleOntoRef`. Stats (RMS err, peak err) + cursor
+// readout remain anchored to the active (first visible) log so the
+// header stays a stable single-value surface at N≥2 — flip the eye
+// to inspect another log's stats.
 //
-// What's wired now: axis selector, full-log render, hover → shared
-// cursor (other panels read it via view.cursorTime), RMS / peak error
-// computed in Layer 2 (`lib/trackingStats.ts`). Brush-to-zoom is uPlot's
-// native cursor.drag.x.
-//
-// Reserved for later: chart-side rendering of the pinned cursor
-// (needs cross-chart sync hook; deferred until the second time-domain
-// panel lands).
+// What's real here: every sample of each log's hydrated `gyroADC[i]` /
+// `setpoint[i]` field arrays goes straight into uPlot via the
+// session-time resample, no decimation. The chart-rendering-fidelity
+// invariant is the whole reason we use uPlot — see
+// `project-chart-rendering-fidelity` memory if tempted to downsample
+// upstream.
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, ref, watchEffect } from 'vue';
 import { storeToRefs } from 'pinia';
-import type { AlignedData, Options } from 'uplot';
+import type { AlignedData, Options, Series } from 'uplot';
 
+import { useSessionStore, type LogState } from '@/stores/session';
 import { useActiveLog } from '@/composables/useActiveLog';
+import { useAlignedTime } from '@/composables/useAlignedTime';
 import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
 import { useCursorSamples } from '@/composables/useCursorSamples';
 import { nearestTimeIndex } from '@/lib/dtype';
 import { trackingStats } from '@/lib/trackingStats';
+import {
+  resampleOntoRef,
+  sessionTimeRangeFn,
+  useSessionRefTime,
+} from '@/lib/sessionTime';
+import {
+  familyForIndex,
+  tintTowardFamily,
+  type FamilySpec,
+} from '@/lib/logColors';
 
 type AxisSpec = {
   id: 0 | 1 | 2;
@@ -42,119 +54,195 @@ const AXES: AxisSpec[] = [
   { id: 2, label: 'Yaw',   short: 'Y', setpoint: 'setpoint[2]', gyro: 'gyroADC[2]' },
 ];
 
-// Blueprint palette — duplicated as literal CSS strings because uPlot
-// needs concrete colors (it doesn't read CSS variables). Keep in sync
-// with tailwind.css `@theme` block if Blueprint ever shifts.
+// Base colors — tinted toward each log's family for the per-log strokes.
+// Setpoint reads as the dim dashed lead, gyro as the brighter measured trace.
 const COLORS = {
   ink3:    '#7a90b0',
-  ink2:    '#b6c7e0',
   line:    '#1f3a5a',
-  line2:   '#2b4d72',
-  accent:  '#7ec8ff',
-  warn:    '#ffc46a',
+  setpoint: '#b6c7e0',
+  gyro:    '#7ec8ff',
 } as const;
 
 const selectedAxis = ref<0 | 1 | 2>(0);
 
-const logStore = useActiveLog();
+const session = useSessionStore();
 const view = useViewStore();
-const { time, fields, hydrating } = logStore;
+const activeLog = useActiveLog();
 
 const axisSpec = computed(() => AXES[selectedAxis.value]);
 
-async function hydrateForAxis(id: 0 | 1 | 2) {
-  const a = AXES[id];
-  await logStore.ensureFields([a.setpoint, a.gyro]);
+interface LogEntry {
+  log: LogState;
+  family: FamilySpec;
+  hidden: boolean;
 }
-onMounted(() => hydrateForAxis(selectedAxis.value));
-watch(selectedAxis, hydrateForAxis);
 
-const setpointArr = computed<Float32Array | undefined>(() => fields.value.get(axisSpec.value.setpoint));
-const gyroArr = computed<Float32Array | undefined>(() => fields.value.get(axisSpec.value.gyro));
+const logEntries = computed<LogEntry[]>(() => {
+  const out: LogEntry[] = [];
+  let idx = 0;
+  for (const log of session.logs.values()) {
+    out.push({
+      log,
+      family: familyForIndex(idx),
+      hidden: view.isLogHidden(log.id),
+    });
+    idx += 1;
+  }
+  return out;
+});
+
+const visibleEntries = computed(() =>
+  logEntries.value.filter((e) => !e.hidden),
+);
+
+// Hydrate the selected axis's setpoint + gyro across every loaded log.
+// watchEffect re-fires when selectedAxis changes OR when the set of
+// logs changes (add/remove), so newly-added logs auto-hydrate.
+watchEffect(() => {
+  const a = AXES[selectedAxis.value];
+  for (const { log } of logEntries.value) {
+    session.ensureFields(log.id, [a.setpoint, a.gyro]).catch(() => {
+      // Hydration failures recorded on the log's scanError; the chart
+      // just renders without that log's data.
+    });
+  }
+});
+
+const activeSetpointArr = computed<Float32Array | undefined>(() =>
+  activeLog.fields.value.get(axisSpec.value.setpoint),
+);
+const activeGyroArr = computed<Float32Array | undefined>(() =>
+  activeLog.fields.value.get(axisSpec.value.gyro),
+);
 
 const isHydrating = computed(() =>
-  hydrating.value.has(axisSpec.value.setpoint) || hydrating.value.has(axisSpec.value.gyro),
+  activeLog.hydrating.value.has(axisSpec.value.setpoint) ||
+  activeLog.hydrating.value.has(axisSpec.value.gyro),
 );
 
 const ready = computed(() =>
-  time.value.length > 0 &&
-  setpointArr.value !== undefined && setpointArr.value.length > 0 &&
-  gyroArr.value !== undefined && gyroArr.value.length > 0,
+  activeLog.time.value.length > 0 &&
+  activeSetpointArr.value !== undefined && activeSetpointArr.value.length > 0 &&
+  activeGyroArr.value !== undefined && activeGyroArr.value.length > 0,
 );
 
-const data = computed<AlignedData>(() => {
-  if (!ready.value) {
-    // uPlot tolerates empty arrays at construction; this branch is only
-    // exercised before the first hydrate resolves.
-    return [new Float32Array(0), new Float32Array(0), new Float32Array(0)] as unknown as AlignedData;
+const refTime = useSessionRefTime();
+
+interface LogTraces {
+  entry: LogEntry;
+  setpointArr: Float32Array;
+  gyroArr: Float32Array;
+}
+
+const allTraces = computed<LogTraces[]>(() => {
+  const out: LogTraces[] = [];
+  const a = axisSpec.value;
+  for (const entry of visibleEntries.value) {
+    const sp = entry.log.fields.get(a.setpoint);
+    const gy = entry.log.fields.get(a.gyro);
+    if (!sp || !gy || sp.length === 0 || gy.length === 0) continue;
+    out.push({ entry, setpointArr: sp, gyroArr: gy });
   }
-  return [time.value, setpointArr.value!, gyroArr.value!] as unknown as AlignedData;
+  return out;
 });
 
-const opts = computed<Options>(() => ({
-  width: 800,
-  height: 300,
-  legend: { show: false },
-  scales: {
-    x: { time: false },
-    y: { auto: true },
-  },
-  cursor: {
-    drag: { x: true, y: false, uni: 50 },
-    focus: { prox: 30 },
-    points: { show: true, size: 5 },
-  },
-  series: [
-    {},
-    { label: 'setpoint', stroke: COLORS.ink2,   width: 1,    dash: [4, 2] },
-    { label: 'gyro',     stroke: COLORS.accent, width: 1.25 },
-  ],
-  axes: [
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
+const data = computed<AlignedData>(() => {
+  if (!ready.value || refTime.value.length === 0 || allTraces.value.length === 0) {
+    return [new Float32Array(0)] as unknown as AlignedData;
+  }
+  const series: Float32Array[] = [];
+  for (const t of allTraces.value) {
+    series.push(resampleOntoRef(t.entry.log, refTime.value, t.setpointArr));
+    series.push(resampleOntoRef(t.entry.log, refTime.value, t.gyroArr));
+  }
+  return [refTime.value, ...series] as unknown as AlignedData;
+});
+
+const opts = computed<Options>(() => {
+  const series: Series[] = [{}];
+  for (const t of allTraces.value) {
+    const fam = t.entry.family;
+    series.push({
+      label: `${t.entry.log.name} setpoint`,
+      stroke: tintTowardFamily(COLORS.setpoint, fam),
+      width: 1,
+      dash: [4, 2],
+    });
+    series.push({
+      label: `${t.entry.log.name} gyro`,
+      stroke: tintTowardFamily(COLORS.gyro, fam),
+      width: 1.25,
+    });
+  }
+  return {
+    width: 800,
+    height: 300,
+    legend: { show: false },
+    scales: {
+      x: { time: false, range: sessionTimeRangeFn },
+      y: { auto: true },
     },
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      // Must match TimeBar's PLOT_AXIS_LEFT_PX so the time-bar cursor
-      // visually aligns with this chart's cursor at the same time t.
-      size:   50,
+    cursor: {
+      drag: { x: true, y: false, uni: 50 },
+      focus: { prox: 30 },
+      points: { show: true, size: 5 },
     },
-  ],
-  hooks: {
-    setCursor: [
-      (u) => {
-        const idx = u.cursor.idx;
-        if (idx == null) {
-          view.clearCursorIfNotPinned();
-          return;
-        }
-        if (view.cursorPinned) return;
-        const t = u.data[0][idx];
-        if (typeof t === 'number') view.setCursor(t);
+    series,
+    axes: [
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+      },
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        size:   50,
       },
     ],
-  },
-}));
+    hooks: {
+      setCursor: [
+        (u) => {
+          const idx = u.cursor.idx;
+          if (idx == null) {
+            view.clearCursorIfNotPinned();
+            return;
+          }
+          if (view.cursorPinned) return;
+          const t = u.data[0][idx];
+          if (typeof t === 'number') view.setCursor(t);
+        },
+      ],
+    },
+  };
+});
 
 const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
 const { pinnedPx } = useChartPinnedCursor({ plot, host: hostRef });
 
+// M1.7.1 — project session-time cursor back to the active log's local
+// axis for the readout below. Stable across activeId changes (eye
+// toggle) and the active log's `timeOffsetSec` (drag-shift).
+const activeAlign = useAlignedTime(() => activeLog.activeId.value);
+
+// Stats from active log only — single-log readout keeps the header
+// surface stable. Flip the eye to inspect another log's RMS/peak.
 const stats = computed(() => {
   if (!ready.value) return null;
-  return trackingStats(setpointArr.value!, gyroArr.value!);
+  return trackingStats(activeSetpointArr.value!, activeGyroArr.value!);
 });
 
 const peakErrorTime = computed(() => {
   const s = stats.value;
-  if (!s || time.value.length === 0) return null;
-  return time.value[Math.min(s.peakErrorIndex, time.value.length - 1)];
+  if (!s || activeLog.time.value.length === 0) return null;
+  const t = activeLog.time.value[Math.min(s.peakErrorIndex, activeLog.time.value.length - 1)];
+  // Project to session time so the displayed timestamp matches the
+  // chart's x-axis when the active log has an offset.
+  return t + activeAlign.offsetSec.value;
 });
 
 function selectAxis(id: 0 | 1 | 2) {
@@ -165,14 +253,15 @@ function resetZoom() {
   plot.resetZoom();
 }
 
-// --- live cursor sample contributions ---
 const { cursorTime } = storeToRefs(view);
 const liveSamples = computed<CursorSample[]>(() => {
   if (!ready.value || cursorTime.value === null) return [];
-  const idx = nearestTimeIndex(time.value, cursorTime.value);
+  const localCursor = activeAlign.alignedCursor.value;
+  if (localCursor === null) return [];
+  const idx = nearestTimeIndex(activeLog.time.value, localCursor);
   if (idx === null) return [];
-  const sp = setpointArr.value![idx];
-  const gy = gyroArr.value![idx];
+  const sp = activeSetpointArr.value![idx];
+  const gy = activeGyroArr.value![idx];
   const err = gy - sp;
   const ax = axisSpec.value.label;
   return [
@@ -197,6 +286,12 @@ const liveSamples = computed<CursorSample[]>(() => {
   ];
 });
 useCursorSamples({ sourceKey: 'tracking', samples: liveSamples });
+
+const multiLogNote = computed(() => {
+  const n = visibleEntries.value.length;
+  if (n <= 1) return '';
+  return `${n} logs · session time · stats + readout shown for active log only`;
+});
 </script>
 
 <template>
@@ -209,7 +304,7 @@ useCursorSamples({ sourceKey: 'tracking', samples: liveSamples });
           Setpoint tracking · {{ axisSpec.label.toLowerCase() }} axis
         </div>
         <div class="font-mono text-[10.5px] text-bp-ink-3 mt-px">
-          gyro vs setpoint · drag to zoom
+          {{ multiLogNote || 'gyro vs setpoint · drag to zoom' }}
         </div>
       </div>
 

@@ -45,11 +45,14 @@ step-response amplitude calibration vs PIDscope). M1.7 landed
 2026-05-17 + M1.7.1 landed 2026-05-18: multi-tenant Web Worker,
 session store, every panel migrated off the legacy single-log shim,
 LogRoster strip with family colors + eye-as-focus + drag-to-align
-handle, Spectrum/Servos/Step iterate `session.logs.values()` with
-HSL-tinted per-(log×axis) traces, RecommendTab "log i of N" pager,
-ServoPanel adopts session-time x-axis with per-log resampling via
-`useAlignedTime`. See [[project-m17-multi-log-architecture]] memory
-for the load-bearing design decisions.
+handle, every time-domain compare panel (Servo, Tracking, PID,
+SPA, S-Term, Airspeed) now iterates `session.logs.values()` with
+HSL-tinted per-(log×series) traces on a shared session-time x-axis
+via `useAlignedTime` + `src/lib/sessionTime.ts` helpers, Spectrum
+and Step intentionally untouched (x = frequency / impulse-relative
+time, alignment doesn't apply), RecommendTab "log i of N" pager.
+See [[project-m17-multi-log-architecture]] memory for the load-
+bearing design decisions.
 
 **Done:**
 
@@ -466,22 +469,17 @@ for the load-bearing design decisions.
       `latency 50%`. Cross-check expected: btfl_002 should drop
       from peak 335% toward 1.3-2.0 range.
 - M1.0 corpus assembly track (not started).
-- **Other compare panels' session-time migration (discretionary).**
-  ServoPanel is the only chart that currently treats its x as
-  session time + projects the cursor via `useAlignedTime`. Spectrum,
-  Step, PIDContribution, and Tracking still use raw log-local x —
-  works perfectly when the active log's offset is 0 (the common
-  case), but a non-zero active-log offset will subtly de-sync those
-  panels' cursor readouts from the trace. Migration is the same
-  pattern: import `useAlignedTime(() => activeLog.activeId.value)`,
-  use `activeAlign.alignedCursor.value` in liveSamples, replace
-  `padToRef` with `resampleOntoRef`-style nearest-sample math, swap
-  refTime to longest aligned-time array. Held until someone
-  actually wants inter-log alignment in those panels.
 - Optional alignment heuristics (first-arm event, first-mode-change,
-  GPS time sync) for `session.setTimeOffset` auto-suggestion. Math
-  + tests for the manual-offset case live in
-  `tests/unit/useAlignedTime.test.ts`.
+  GPS time sync, cross-correlation) for `session.setTimeOffset`
+  auto-suggestion. All time-domain panels are already session-time
+  + per-log resampled, so adding auto-align is purely a "compute
+  offset and call `session.setTimeOffset(id, offset)`" surface —
+  no chart-side work. Simplest first slice (~30 min): walk
+  `flightModeFlags` or `rcCommand[3]` per log, find first armed /
+  first throttle-up sample, set offsets so all logs share session
+  t=0 at that event. Add an "auto-align" button on the LogRoster.
+  Manual drag handle stays as the override for when detection
+  fails or the user wants a different anchor.
 - Upstream `blackbox-log` PR (held by Brian).
 
 **Explicitly out of scope (won't build):**

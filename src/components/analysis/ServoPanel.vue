@@ -46,6 +46,11 @@ import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
 import { useCursorSamples } from '@/composables/useCursorSamples';
 import { nearestTimeIndex } from '@/lib/dtype';
+import {
+  resampleOntoRef,
+  sessionTimeRangeFn,
+  useSessionRefTime,
+} from '@/lib/sessionTime';
 import { detectSaturation, type SaturationResult } from '@/lib/servoAnalysis';
 import {
   classifyServos,
@@ -331,89 +336,10 @@ const allTraces = computed<LogChannelTrace[]>(() => {
   return out;
 });
 
-/** Per-log aligned time as Float64: `log.time[i] + log.timeOffsetSec`.
- *  ALWAYS allocates Float64, even at offset 0. Two reasons:
- *  (1) Float32 round-trip otherwise introduces ~1e-8 epsilons that flip
- *      edge-sample bounds checks in `resampleOntoRef`, dropping samples
- *      and cascading into a blank uPlot chart at "round-number"
- *      offsets like exactly −0.60 s.
- *  (2) Mixing Float32 and Float64 typed arrays at the uPlot x-axis
- *      boundary breaks uPlot's renderer when the type swaps mid-drag
- *      (offset 0 → non-zero changes the typed-array constructor under
- *      uPlot's feet, manifesting as a blank chart at negative offsets).
- *  The extra allocation per render is fine — typical 150k-sample logs
- *  cost ~1 MB each, GC handles it comfortably at drag rates. */
-function alignedTimeFor(log: LogState): Float64Array {
-  const t = log.time;
-  const off = log.timeOffsetSec;
-  const out = new Float64Array(t.length);
-  for (let i = 0; i < t.length; i++) out[i] = t[i] + off;
-  return out;
-}
-
-/** Resample `valueArr` (indexed by `log.time`) onto session-time
- *  positions in `ref`. Uses uniform-rate index math for O(1) per
- *  sample. Out-of-range positions clamp to the nearest edge sample
- *  rather than emitting NaN — uPlot's renderer mishandles series with
- *  leading NaN when other series in the same chart have valid data at
- *  index 0 (the chart blanks entirely, no y-axis labels). Clamping
- *  produces a "flatline" extension at the log's boundaries, which is
- *  benign for continuous PWM/servo traces; the actual log-bounded
- *  region is still where the meaningful comparison happens. */
-function resampleOntoRef(
-  log: LogState,
-  ref: Float64Array,
-  valueArr: Float32Array,
-): Float32Array {
-  const localTime = log.time;
-  const out = new Float32Array(ref.length);
-  const N = localTime.length;
-  if (N === 0 || valueArr.length === 0) {
-    out.fill(NaN);
-    return out;
-  }
-  const offset = log.timeOffsetSec;
-  const t0 = localTime[0];
-  const tLast = localTime[N - 1];
-  const dt = (tLast - t0) / (N - 1);
-  if (!isFinite(dt) || dt <= 0) {
-    out.fill(NaN);
-    return out;
-  }
-  const M = Math.min(valueArr.length, N);
-  for (let i = 0; i < ref.length; i++) {
-    const localT = ref[i] - offset;
-    let idx = Math.round((localT - t0) / dt);
-    if (idx < 0) idx = 0;
-    else if (idx >= M) idx = M - 1;
-    out[i] = valueArr[idx];
-  }
-  return out;
-}
-
-/** Longest aligned time axis among visible logs, as Float64. Used as
- *  the chart x (session time). Logs whose aligned range falls outside
- *  this window simply NaN out in `resampleOntoRef`. */
-const refTime = computed<Float64Array>(() => {
-  let best: Float64Array = new Float64Array(0);
-  let bestLen = 0;
-  for (const { log } of visibleEntries.value) {
-    const aligned = alignedTimeFor(log);
-    if (aligned.length > bestLen) {
-      bestLen = aligned.length;
-      best = aligned;
-    }
-  }
-  if (bestLen === 0) {
-    // Fallback: convert active log's raw time to Float64 to keep
-    // refTime's type stable across all code paths.
-    const t = activeLog.time.value;
-    const out = new Float64Array(t.length);
-    for (let i = 0; i < t.length; i++) out[i] = t[i];
-    return out;
-  }
-  return best;
-});
+// Session-time x-axis (longest aligned-time among visible logs) — see
+// `src/lib/sessionTime.ts` for the load-bearing precision + NaN
+// lessons baked into these helpers.
+const refTime = useSessionRefTime();
 
 const data = computed<AlignedData>(() => {
   if (!ready.value || refTime.value.length === 0) {
@@ -453,17 +379,9 @@ const opts = computed<Options>(() => {
     scales: {
       x: {
         time: false,
-        // Force uPlot to refit the x-axis to the data's actual range
-        // every time setData lands. Without this, when refTime's range
-        // shifts under a chip drag (offset changes session-time start /
-        // end), uPlot keeps the stale x-scale and the chart visibly
-        // blanks (y-axis collapses because no data falls in the cached
-        // visible x window). Returning [dataMin, dataMax] is what
-        // uPlot would default to anyway — but routed through `range`
-        // it actually fires reliably on setData. User-initiated
-        // drag-zoom (cursor.drag.x) still works between data updates;
-        // each new data tick just snaps back to fit.
-        range: (_u, dataMin, dataMax) => [dataMin, dataMax],
+        // Session-time x — force uPlot to refit on every setData.
+        // See sessionTime.ts for why this is necessary.
+        range: sessionTimeRangeFn,
       },
       y: { auto: true },
     },

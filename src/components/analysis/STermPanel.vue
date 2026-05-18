@@ -5,22 +5,27 @@
 //
 // A secondary y-axis renders the per-sample TPA factor (post/pre) as
 // a faint trace — values near 1.0 mean TPA isn't doing anything; near
-// 0 means S is heavily attenuated. Gaps in this trace are intentional
-// (pre below activeThreshold).
+// 0 means S is heavily attenuated.
 //
-// Per-axis selector (R/P/Y chips) matches the convention used by the
-// SPA, Step, and PIDFS panels — the three axes' dynamics often differ
-// enough that overlay would obscure detail.
+// M1.7.1 multi-log: chart x is SESSION time; each visible log
+// contributes a (pre, post, factor) triplet, tinted toward its family
+// color. Per-log signal resolution may differ (one log may have
+// `debug_mode = S_TERM`, another may not) — logs that can't resolve
+// both pre and post for the selected axis are silently dropped from
+// the overlay. Stats + pending-message + module state remain anchored
+// to the active log; flip the eye to inspect another log.
 //
 // Diagnostic-only per roadmap Module F / M7 — no CLI emission, no
 // confidence scoring. TPA's tuning lives in M3's recommender (BASIC
 // airspeed fit); this panel exists so the user can sanity-check
 // whether their tuning is taking effect on the S-term in particular.
 
-import { computed, onMounted, ref, watch } from 'vue';
-import type { AlignedData, Options } from 'uplot';
+import { computed, ref, watchEffect } from 'vue';
+import type { AlignedData, Options, Series } from 'uplot';
 
+import { useSessionStore, type LogState } from '@/stores/session';
 import { useActiveLog } from '@/composables/useActiveLog';
+import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { evaluateModules } from '@/lib/capabilityPredicates';
 import { resolveSignal } from '@/lib/signalRegistry';
@@ -28,6 +33,16 @@ import {
   analyzeSTermAxis,
   type STermAxisAnalysis,
 } from '@/lib/sTermAnalysis';
+import {
+  resampleOntoRef,
+  sessionTimeRangeFn,
+  useSessionRefTime,
+} from '@/lib/sessionTime';
+import {
+  familyForIndex,
+  tintTowardFamily,
+  type FamilySpec,
+} from '@/lib/logColors';
 
 const COLORS = {
   ink3:   '#7a90b0',
@@ -51,60 +66,104 @@ const AXES: AxisSpec[] = [
 
 const selectedAxis = ref<0 | 1 | 2>(0);
 
-const logStore = useActiveLog();
-const { time, fields, hydrating, scanReport } = logStore;
+const session = useSessionStore();
+const view = useViewStore();
+const activeLog = useActiveLog();
 
 const axisSpec = computed(() => AXES[selectedAxis.value]);
 
-const preSourceField = computed(() => {
-  const cap = scanReport.value?.capability;
-  if (!cap) return null;
-  const r = resolveSignal('pre_tpa_s', selectedAxis.value, cap);
-  if (r.state !== 'resolved') return null;
-  if (r.source.kind === 'debug') return `debug[${r.source.channel}]`;
-  return r.source.field;
-});
-const postSourceField = computed(() => {
-  const cap = scanReport.value?.capability;
-  if (!cap) return null;
-  const r = resolveSignal('post_tpa_s', selectedAxis.value, cap);
-  if (r.state !== 'resolved') return null;
-  if (r.source.kind === 'main_frame') return r.source.field;
-  return `debug[${r.source.channel}]`;
+interface LogEntry {
+  log: LogState;
+  family: FamilySpec;
+  hidden: boolean;
+}
+
+const logEntries = computed<LogEntry[]>(() => {
+  const out: LogEntry[] = [];
+  let idx = 0;
+  for (const log of session.logs.values()) {
+    out.push({
+      log,
+      family: familyForIndex(idx),
+      hidden: view.isLogHidden(log.id),
+    });
+    idx += 1;
+  }
+  return out;
 });
 
-async function hydrateForAxis() {
-  const wants: string[] = [];
-  if (preSourceField.value) wants.push(preSourceField.value);
-  if (postSourceField.value) wants.push(postSourceField.value);
-  if (wants.length > 0) await logStore.ensureFields(wants);
+const visibleEntries = computed(() => logEntries.value.filter((e) => !e.hidden));
+
+/** Per-log signal resolution for pre/post TPA S on the selected axis.
+ *  Each log may have different debug_mode availability so the field
+ *  names differ across logs. */
+function resolvePerLog(log: LogState, axis: 0 | 1 | 2): {
+  pre: string | null;
+  post: string | null;
+} {
+  const cap = log.scanReport?.capability;
+  if (!cap) return { pre: null, post: null };
+  const preR  = resolveSignal('pre_tpa_s',  axis, cap);
+  const postR = resolveSignal('post_tpa_s', axis, cap);
+  const pre  = preR.state === 'resolved'
+    ? (preR.source.kind === 'debug'
+        ? `debug[${preR.source.channel}]`
+        : preR.source.field)
+    : null;
+  const post = postR.state === 'resolved'
+    ? (postR.source.kind === 'debug'
+        ? `debug[${postR.source.channel}]`
+        : postR.source.field)
+    : null;
+  return { pre, post };
 }
-onMounted(hydrateForAxis);
-watch([selectedAxis, preSourceField, postSourceField], hydrateForAxis);
+
+// Hydrate pre/post for selected axis across every loaded log.
+watchEffect(() => {
+  const axis = selectedAxis.value;
+  for (const { log } of logEntries.value) {
+    const { pre, post } = resolvePerLog(log, axis);
+    const wants: string[] = [];
+    if (pre)  wants.push(pre);
+    if (post) wants.push(post);
+    if (wants.length > 0) {
+      session.ensureFields(log.id, wants).catch(() => {});
+    }
+  }
+});
+
+// Active log readouts for stats / pending message.
+const activeResolved = computed(() => {
+  const id = activeLog.activeId.value;
+  if (!id) return { pre: null, post: null };
+  const log = session.logs.get(id);
+  if (!log) return { pre: null, post: null };
+  return resolvePerLog(log, selectedAxis.value);
+});
+
+const activePreArr = computed<Float32Array | undefined>(() =>
+  activeResolved.value.pre ? activeLog.fields.value.get(activeResolved.value.pre) : undefined,
+);
+const activePostArr = computed<Float32Array | undefined>(() =>
+  activeResolved.value.post ? activeLog.fields.value.get(activeResolved.value.post) : undefined,
+);
 
 const isHydrating = computed(() => {
-  const pre = preSourceField.value;
-  const post = postSourceField.value;
-  return (pre !== null && hydrating.value.has(pre)) ||
-         (post !== null && hydrating.value.has(post));
+  const pre  = activeResolved.value.pre;
+  const post = activeResolved.value.post;
+  return (pre  !== null && activeLog.hydrating.value.has(pre))  ||
+         (post !== null && activeLog.hydrating.value.has(post));
 });
 
-const preArr  = computed<Float32Array | undefined>(() =>
-  preSourceField.value ? fields.value.get(preSourceField.value) : undefined,
-);
-const postArr = computed<Float32Array | undefined>(() =>
-  postSourceField.value ? fields.value.get(postSourceField.value) : undefined,
-);
-
-const analysis = computed<STermAxisAnalysis | null>(() => {
-  const pre = preArr.value;
-  const post = postArr.value;
+const activeAnalysis = computed<STermAxisAnalysis | null>(() => {
+  const pre  = activePreArr.value;
+  const post = activePostArr.value;
   if (!pre || !post) return null;
   return analyzeSTermAxis(selectedAxis.value, pre, post);
 });
 
 const modules = computed(() => {
-  const r = scanReport.value;
+  const r = activeLog.scanReport.value;
   if (!r) return null;
   return evaluateModules(r.capability);
 });
@@ -114,94 +173,149 @@ const moduleState = computed(() => {
   return m.sTermTpaViz[axisSpec.value.label.toLowerCase() as 'roll' | 'pitch' | 'yaw'];
 });
 
-const ready = computed(() => {
-  return preArr.value !== undefined &&
-         postArr.value !== undefined &&
-         time.value.length > 0 &&
-         analysis.value !== null;
+const ready = computed(() =>
+  activePreArr.value !== undefined &&
+  activePostArr.value !== undefined &&
+  activeLog.time.value.length > 0 &&
+  activeAnalysis.value !== null,
+);
+
+const refTime = useSessionRefTime();
+
+interface LogTraces {
+  entry: LogEntry;
+  preArr: Float32Array;
+  postArr: Float32Array;
+  factorArr: Float32Array;
+}
+
+const allTraces = computed<LogTraces[]>(() => {
+  const out: LogTraces[] = [];
+  const axis = selectedAxis.value;
+  for (const entry of visibleEntries.value) {
+    const { pre, post } = resolvePerLog(entry.log, axis);
+    if (!pre || !post) continue;
+    const preArr  = entry.log.fields.get(pre);
+    const postArr = entry.log.fields.get(post);
+    if (!preArr || !postArr || preArr.length === 0 || postArr.length === 0) continue;
+    const a = analyzeSTermAxis(axis, preArr, postArr);
+    out.push({
+      entry,
+      preArr,
+      postArr,
+      factorArr: a.tpaFactorSeries,
+    });
+  }
+  return out;
 });
 
 const data = computed<AlignedData>(() => {
-  if (!ready.value) {
-    return [new Float32Array(0), new Float32Array(0), new Float32Array(0), new Float32Array(0)] as unknown as AlignedData;
+  if (!ready.value || refTime.value.length === 0 || allTraces.value.length === 0) {
+    return [
+      new Float32Array(0),
+      new Float32Array(0),
+      new Float32Array(0),
+      new Float32Array(0),
+    ] as unknown as AlignedData;
   }
-  return [
-    time.value,
-    preArr.value!,
-    postArr.value!,
-    analysis.value!.tpaFactorSeries,
-  ] as unknown as AlignedData;
+  const series: Float32Array[] = [];
+  for (const t of allTraces.value) {
+    series.push(resampleOntoRef(t.entry.log, refTime.value, t.preArr));
+    series.push(resampleOntoRef(t.entry.log, refTime.value, t.postArr));
+    series.push(resampleOntoRef(t.entry.log, refTime.value, t.factorArr));
+  }
+  return [refTime.value, ...series] as unknown as AlignedData;
 });
 
-const opts = computed<Options>(() => ({
-  width: 800,
-  height: 300,
-  legend: { show: false },
-  scales: {
-    x:  { time: false },
-    y:  { auto: true },
-    y2: { auto: false, range: [-0.05, 1.50] },
-  },
-  cursor: {
-    drag: { x: true, y: false, uni: 50 },
-    focus: { prox: 30 },
-    points: { show: true, size: 5 },
-  },
-  series: [
-    {},
-    { label: 'pre-TPA S',  stroke: COLORS.warn,   width: 1,   scale: 'y'  },
-    { label: 'post-TPA S', stroke: COLORS.accent, width: 1.5, scale: 'y'  },
-    { label: 'TPA factor', stroke: COLORS.factor, width: 0.75, scale: 'y2', spanGaps: false },
-  ],
-  axes: [
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      values: (_u, splits) => splits.map((v) => `${v.toFixed(0)} s`),
+const opts = computed<Options>(() => {
+  const series: Series[] = [{}];
+  for (const t of allTraces.value) {
+    const fam = t.entry.family;
+    series.push({
+      label: `${t.entry.log.name} pre-TPA S`,
+      stroke: tintTowardFamily(COLORS.warn, fam),
+      width: 1,
+      scale: 'y',
+    });
+    series.push({
+      label: `${t.entry.log.name} post-TPA S`,
+      stroke: tintTowardFamily(COLORS.accent, fam),
+      width: 1.5,
+      scale: 'y',
+    });
+    series.push({
+      label: `${t.entry.log.name} TPA factor`,
+      stroke: tintTowardFamily(COLORS.factor, fam),
+      width: 0.75,
+      scale: 'y2',
+      spanGaps: false,
+    });
+  }
+  return {
+    width: 800,
+    height: 300,
+    legend: { show: false },
+    scales: {
+      x:  { time: false, range: sessionTimeRangeFn },
+      y:  { auto: true },
+      y2: { auto: false, range: [-0.05, 1.50] },
     },
-    {
-      scale:  'y',
-      stroke: COLORS.accent,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      size:   50,
-      values: (_u, splits) => splits.map((v) => v.toFixed(0)),
+    cursor: {
+      drag: { x: true, y: false, uni: 50 },
+      focus: { prox: 30 },
+      points: { show: true, size: 5 },
     },
-    {
-      scale:  'y2',
-      side:   1,
-      stroke: COLORS.factor,
-      grid:   { show: false },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      size:   50,
-      values: (_u, splits) => splits.map((v) => v.toFixed(2)),
-    },
-  ],
-  hooks: {
-    draw: [
-      (u) => {
-        const ctx = u.ctx;
-        const left = u.bbox.left;
-        const width = u.bbox.width;
-        ctx.save();
-        // Reference line at TPA factor = 1.0 (no attenuation) on y2.
-        ctx.strokeStyle = '#7ee0a866';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 3]);
-        const y1 = u.valToPos(1.0, 'y2', true);
-        ctx.beginPath();
-        ctx.moveTo(left, y1); ctx.lineTo(left + width, y1);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
+    series,
+    axes: [
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        values: (_u, splits) => splits.map((v) => `${v.toFixed(0)} s`),
+      },
+      {
+        scale:  'y',
+        stroke: COLORS.accent,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        size:   50,
+        values: (_u, splits) => splits.map((v) => v.toFixed(0)),
+      },
+      {
+        scale:  'y2',
+        side:   1,
+        stroke: COLORS.factor,
+        grid:   { show: false },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        size:   50,
+        values: (_u, splits) => splits.map((v) => v.toFixed(2)),
       },
     ],
-  },
-}));
+    hooks: {
+      draw: [
+        (u) => {
+          const ctx = u.ctx;
+          const left = u.bbox.left;
+          const width = u.bbox.width;
+          ctx.save();
+          // Reference line at TPA factor = 1.0 (no attenuation) on y2.
+          ctx.strokeStyle = '#7ee0a866';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
+          const y1 = u.valToPos(1.0, 'y2', true);
+          ctx.beginPath();
+          ctx.moveTo(left, y1); ctx.lineTo(left + width, y1);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+        },
+      ],
+    },
+  };
+});
 
 const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
@@ -214,30 +328,40 @@ const pendingMessage = computed(() => {
   const ms = moduleState.value;
   if (ms && ms.state === 'blocked') return ms.reason ?? 'S-term TPA viz blocked on this log';
   if (ms && ms.state === 'inactive') return ms.reason ?? 'S-term inactive on this axis';
-  if (!preSourceField.value) return 'pre-TPA S signal not resolvable — set `debug_mode = S_TERM` in BF';
-  if (!postSourceField.value) return 'post-TPA S (axisS) not present — USE_WING firmware build required';
-  if (!time.value.length) return 'time axis empty — load a log first';
+  if (!activeResolved.value.pre)  return 'pre-TPA S signal not resolvable — set `debug_mode = S_TERM` in BF';
+  if (!activeResolved.value.post) return 'post-TPA S (axisS) not present — USE_WING firmware build required';
+  if (!activeLog.time.value.length) return 'time axis empty — load a log first';
   return 'computing S-term TPA analysis…';
 });
 
 const meanAttenText = computed(() => {
-  const a = analysis.value;
+  const a = activeAnalysis.value;
   return a ? `${(a.meanAttenuation * 100).toFixed(0)} %` : '—';
 });
 const minFactorText = computed(() => {
-  const a = analysis.value;
+  const a = activeAnalysis.value;
   return a ? a.minTpaFactor.toFixed(2) : '—';
 });
 const activePctText = computed(() => {
-  const a = analysis.value;
+  const a = activeAnalysis.value;
   return a ? `${a.activePct.toFixed(0)} %` : '—';
 });
 const attenToneClass = computed(() => {
-  const a = analysis.value;
+  const a = activeAnalysis.value;
   if (!a) return 'text-bp-ink';
   if (a.meanAttenuation >= 0.4) return 'text-bp-stamp';
   if (a.meanAttenuation >= 0.15) return 'text-bp-warn';
   return 'text-bp-ink';
+});
+
+const multiLogNote = computed(() => {
+  const n = visibleEntries.value.length;
+  if (n <= 1) return '';
+  const drawing = allTraces.value.length;
+  if (drawing < n) {
+    return `${drawing} of ${n} logs · session time · ${n - drawing} dropped (no S-term signals)`;
+  }
+  return `${n} logs · session time · stats + pending shown for active log only`;
 });
 </script>
 
@@ -251,7 +375,7 @@ const attenToneClass = computed(() => {
           S-term TPA effectiveness &middot; {{ axisSpec.label.toLowerCase() }} axis
         </div>
         <div class="font-mono text-[10.5px] text-bp-ink-3 mt-px">
-          pre-TPA vs post-TPA S contribution &middot; factor = post / pre
+          {{ multiLogNote || 'pre-TPA vs post-TPA S contribution · factor = post / pre' }}
         </div>
       </div>
 
