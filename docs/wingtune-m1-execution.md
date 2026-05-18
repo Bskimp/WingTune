@@ -12,9 +12,9 @@
 - **Parser debug-mode coverage caught up to BF master.** `Bskimp/blackbox-log:wing-support` gains TPA=90 / S_TERM=91 / SPA=92 / WING_SETPOINT=95 alongside the existing WING_LAUNCH=101 (commit `4dd54b5`). Channel layouts ground-truthed against the merged BF PRs: DEBUG_SPA channel = axis × 1000 (PR #13719); DEBUG_WING_SETPOINT channel = 2×axis (pre-TPA) / 2×axis+1 (post-TPA) (PR #14010); DEBUG_S_TERM same pairing for s-term pre/post (PR #14010); DEBUG_TPA channel = airspeed estimate (PR #13895, channel TODO-verify). WingTune's signal registry consumes those mappings.
 - **M2 emission loop landed (slices 1 + 2).** Slice 1: `src/lib/pidfs.ts` (`meanAbs` + `pidfsShares`, single-pass typed-array reducers); `PIDContributionPanel.vue` (per-axis P/I/D/F/S traces, chip toggle with shift-click solo, mean-abs share strip + dominant-term indicator, present-terms-only rendering when D/S missing on yaw). Slice 2: `src/lib/recommendations.ts` (Recommendation shape + sortBySeverity + gatherRecommendations); `src/lib/recommenders/debugMode.ts` (first concrete recommender — green-confidence "set debug_mode = X" CLI recs emitted when readiness shows a wing-tuning module blocked specifically by missing debug coverage). Recommend tab UI (RecommendCard with cardinal-rule-#5 copy-removed-on-red gate, RecommendList severity-sorted, RecommendTab with must/should/could/ok score header). TabBar auto-shows Recommend tab when rec count > 0.
 
-**Open M1 tails:** M1.0 corpus assembly (not started). M1.5 inspector — Summary's FieldTable + ReadinessCard cover most of the original M1.5 scope; a deeper CLI-parameter-dump browser remains. M1.7 multi-log + session persistence not started. Scan-progress streaming UX (indeterminate striped bar today). LRU eviction policy on hydrated-field cache. Tauri `openSource(path)` + native file picker. Upstream `blackbox-log` PR (held by Brian).
+**Open M1 tails:** M1.0 corpus assembly (not started). M1.5 inspector — Summary's FieldTable + ReadinessCard cover most of the original M1.5 scope; a deeper CLI-parameter-dump browser remains. M1.7 multi-log compare not started (scope reduced 2026-05-17 — persistence dropped; see M1.7 section). Upstream `blackbox-log` PR (held by Brian).
 
-**Open M2+ tails surfaced this rev:** evidence-chip cursor-pin wiring on RecommendCard (data shape supports it; UI deferred). Filter chips + group-by toggle on Recommend tab. Dismiss / mark-applied persistence. The DEBUG_TPA channel index for the airspeed estimate needs verification from BF source (currently best-guess channel 0).
+**Open M2+ tails surfaced this rev:** The DEBUG_TPA channel index for the airspeed estimate needs verification from BF source (currently best-guess channel 0). Group-by toggle on Recommend tab (severity filter chips shipped). Dismiss / mark-applied — dropped 2026-05-17 along with session persistence; not enough recs in a typical session to justify the UI.
 
 ## Changes from rev 11 → rev 12
 
@@ -144,7 +144,7 @@ M1.3  File drop + scan progress + fielded lazy hydration (Float32 throughout)
 M1.4  uPlot time-series + event/annotation track
 M1.5  Header inspector                     (FC config view, wing detection with confidence)
 M1.6  Log readiness report                 (capability predicates)
-M1.7  Multi-log + session persistence     (additive features on existing surfaces; no separate compare view)
+M1.7  Multi-log compare                   (additive features on existing surfaces; no separate compare view, no persistence)
 ```
 
 Estimated total: 4–6 weeks of WingTune-side work, **plus** 1–2 weeks of parallel parser-support effort (Rust work on the `blackbox-log` fork). Parser-support is a parallel track, not a gate — WingTune development proceeds against the fork via Cargo patch override starting at M1.1. The work adds effort but minimal calendar time provided you don't try to serialize it after M1.0.
@@ -381,7 +381,7 @@ wingtune/
     │   ├── log.ts                # capability report + frame index + lazily-hydrated fields (active focus log)
     │   ├── view.ts               # scrub window, active workspace, hydration state, time-alignment mode
     │   ├── readiness.ts          # M1.6 capability report (per-log + M1.7 unioned)
-    │   └── session.ts            # M1.7 — multi-log container + save/load (named session)
+    │   └── session.ts            # M1.7 — multi-log container (no save/load; persistence dropped 2026-05-17)
     ├── components/
     │   ├── FileDrop.vue          # web target only
     │   ├── HeaderInspector.vue
@@ -982,9 +982,20 @@ The four states (`available`, `partial`, `inactive`, `blocked`) get four icons (
 
 The same log on BF 2026.6+ firmware would render identically except the `(via ...)` notes shift to `main-frame fields` — no flight pattern change required.
 
-## M1.7 — Multi-log + session persistence
+## M1.7 — Multi-log compare
 
-Multi-log support and named-session save/load. Earlier revs framed this as a separate "campaign mode" UI; that's gone — there is no modal `CompareView.vue`, no separate campaign route. The needs are real but better expressed as **additive features on existing surfaces** plus a persistence layer.
+Multi-log support as additive features on existing surfaces. Earlier revs framed this as a separate "campaign mode" UI plus a named-session save/load layer; both are gone — there is no modal `CompareView.vue`, no separate campaign route, and **no persistence**. The remaining work is the multi-log compare features themselves.
+
+### 2026-05-17 scope cut: persistence dropped
+
+Previously this milestone bundled named-session save/load (`<name>.session.json` on Tauri, IndexedDB on web, prompt-to-re-drop on reload). That's gone. Reasoning:
+
+- Tuning sessions are one-shot — drop a log, analyse for 20-30 min, fly again. Re-opening the same log next session is rare in actual use.
+- The recommender CLI text is already pastable, which covers the "remember what I decided" case.
+- OS-level "recent files" via the Tauri native dialog covers the marginal case of "I want to look at yesterday's log again."
+- Persistence would mean IndexedDB + cache-invalidation logic (file mtime, parser version, schema bumps) + storage budget management + a pile of edge cases (corrupt cache, partial restore, multi-tab conflicts) — engineering for a workflow that doesn't exist in actual tuning use.
+
+Multi-log compare itself is where the real value lives: A/B before/after a tune change, cross-flight PIDFS share trends, spectrum overlay across a filter change, parameter-diff side panel across loaded logs.
 
 ### What lands here
 
@@ -992,39 +1003,37 @@ Multi-log support and named-session save/load. Earlier revs framed this as a sep
 2. **Log picker.** When N ≥ 3, paired-colors alone gets unreadable — the time-series toolbar grows a per-log show/hide control (checkboxes or tabs). Below N = 3 it's hidden.
 3. **Time alignment toggle.** A toolbar control with three options: `absolute` (each log on its own t=0), `first-arm` (each log re-zeroed at its first ARM event), `first-mode-change` (re-zeroed at first flight-mode transition). **Not a one-line toggle** — it's a transform on the X axis: scrub window in aligned space, tooltips show both aligned and absolute timestamps, event-track markers shift with the alignment. Implementation cost is the bulk of M1.7.
 4. **Tuning diff side panel.** Opens from any view when ≥ 2 logs are loaded. Shows a curated set of **main tuning parameters** (P/I/D/F/S per axis, TPA mode + curve + speed params, SPA mode + center/width per axis, rates, filter cutoffs — order of ~30 parameters) across all loaded logs, with diffs highlighted. **Not** a 200-row dump of every header field; the full-matrix view is post-M7 (see roadmap backlog: "Tuning history matrix"). Lives in `components/TuningDiffPanel.vue`.
-5. **Session save/load.** A session is a named bundle: a list of loaded logs (by path on Tauri, by stored `File` reference on web) plus active workspace + time-alignment state. Saved as `<name>.session.json`.
-   - **Tauri target**: written to disk via the standard save dialog, defaulting next to the most recently loaded `.bbl`. Reloading via open dialog or file association.
-   - **Web target**: serialized into IndexedDB keyed by session name. Logs themselves aren't persisted — on reload the user gets a prompt to re-drop the files referenced in the session.
-6. **Unioned readiness in the report.** When multiple logs are loaded, the readiness report shows per-module coverage across logs ("M3 runnable on 2 of 3 logs; via debug on flight 1, via main-frame on flight 2"). When only one log is loaded, the report renders unchanged from M1.6.
+5. **Unioned readiness in the report.** When multiple logs are loaded, the readiness report shows per-module coverage across logs ("M3 runnable on 2 of 3 logs; via debug on flight 1, via main-frame on flight 2"). When only one log is loaded, the report renders unchanged from M1.6.
 
 ### What does NOT land here
 
 - A dedicated `CompareView.vue` or `/compare` route. **There is no separate compare surface.**
+- **Session save/load / named-session persistence.** Dropped 2026-05-17 — see scope cut above.
 - A full parameter-matrix view (parameters × flights as a sortable table with N logs). Tracked as post-M7 backlog item "Tuning history matrix" — defer until M1 is actually being used on a real tuning sequence and the right column/row controls become obvious from use.
+
+### Explicitly out of scope (whole-project, not just M1.7)
+
+- **Live FC connection / MSP / serial / live telemetry.** WingTune is a log analyzer. No reason to plug an FC directly into the app — configuration belongs in BF Configurator, live telemetry in the OSD or a dedicated bench tool. Bench-FC outputs we *do* consume (CLI dumps for KNOWN_PRESETS, header param tables) come via copy-paste from the BF CLI, not a serial link from WingTune.
 
 ### Store sketch
 
 ```ts
 // stores/session.ts
 //
-// "Session" is the persistence concept — a named bundle of loaded logs plus
-// view state. Replaces the earlier `campaign.ts` concept; same underlying
-// data, no implied UI mode.
+// Multi-log container. Holds N loaded logs alongside the `log.ts`
+// focus store. No persistence — when the app closes the logs are
+// gone; user re-drops on next launch.
 export const useSessionStore = defineStore('session', () => {
   const logs = shallowReactive<Map<string, LogHandle>>(new Map());
-  const sessionName = ref<string | null>(null);
-  const dirty = ref(false);
 
-  function addLog(handle: LogHandle) { logs.set(handle.id, handle); dirty.value = true; }
-  function removeLog(id: string) { logs.delete(id); dirty.value = true; }
+  function addLog(handle: LogHandle) { logs.set(handle.id, handle); }
+  function removeLog(id: string) { logs.delete(id); }
 
   // Unioned readiness across all loaded logs — drives the multi-log readiness report.
   // Returns per-module coverage: { resolvedCount, totalLogs, perLog: [{ id, capability }] }
   function unionedReadiness(): MultiLogReport { /* … */ }
 
-  async function save(path: string) { /* serialize logs[].id + view state */ dirty.value = false; }
-  async function load(path: string) { /* hydrate handles, prompt for missing files on web */ }
-  return { logs, sessionName, dirty, addLog, removeLog, unionedReadiness, save, load };
+  return { logs, addLog, removeLog, unionedReadiness };
 });
 ```
 
