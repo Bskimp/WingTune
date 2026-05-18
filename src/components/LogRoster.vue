@@ -21,6 +21,7 @@ import {
   isFamilyCycled,
   LOG_FAMILIES,
 } from '@/lib/logColors';
+import { alignLogToReference } from '@/lib/autoAlign';
 import IconX from '@/components/icons/IconX.vue';
 
 const session = useSessionStore();
@@ -159,6 +160,94 @@ function onToggleVisibility(id: string) {
 }
 
 const familyLegend = computed(() => LOG_FAMILIES.map((f) => f.name).join(' · '));
+
+// ---- M1.7.1 auto-align (cross-correlation) -----------------------------
+// One-click alignment of every visible log to the first visible log via
+// gyro-magnitude cross-correlation. Reference log's offset is preserved
+// (so a manually-anchored reference still works); each other log's
+// offset is overwritten with `refOffset + alignment.offsetSec`.
+//
+// Why gyro magnitude + cross-correlation (and not arm event / throttle
+// threshold): auto-launch fires the arm well before actual flight by
+// an inconsistent amount, so event-based anchors aren't reliable.
+// Cross-correlation finds the time shift that maximizes overlap of
+// the two logs' gyro signatures — directly captures actual flight
+// motion regardless of pre-flight choreography. See
+// `src/lib/autoAlign.ts` for the algorithm + sign convention.
+//
+// Confidence surface: low NCC (< 0.4) or low peak ratio (< 1.5) flags
+// an alignment as "low confidence" in the status line — typically
+// means the two flights don't share enough common content to align
+// reliably (different maneuvers / different airframes / etc.). User
+// can still drag the chip handle to manually adjust.
+
+const visibleEntries = computed(() => entries.value.filter((e) => !e.hidden));
+const canAutoAlign = computed(() => visibleEntries.value.length >= 2);
+
+const isAligning = ref(false);
+const lastAlignStatus = ref<string | null>(null);
+let statusClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+function setStatus(msg: string | null, ms = 4500) {
+  if (statusClearTimer !== null) {
+    clearTimeout(statusClearTimer);
+    statusClearTimer = null;
+  }
+  lastAlignStatus.value = msg;
+  if (msg !== null && ms > 0) {
+    statusClearTimer = setTimeout(() => {
+      lastAlignStatus.value = null;
+      statusClearTimer = null;
+    }, ms);
+  }
+}
+
+async function onAutoAlign() {
+  if (isAligning.value || !canAutoAlign.value) return;
+  isAligning.value = true;
+  setStatus(null);
+  // Yield once so the "aligning…" label paints before the correlation
+  // runs synchronously (~50-150 ms per pair on typical 150k-sample logs).
+  await new Promise<void>((r) => setTimeout(r, 0));
+  try {
+    const vis = visibleEntries.value;
+    const refLog = session.logs.get(vis[0].id);
+    if (!refLog) return;
+    const refOffset = refLog.timeOffsetSec;
+    let aligned = 0;
+    let skipped = 0;
+    let lowConfidence = 0;
+    for (let i = 1; i < vis.length; i++) {
+      const otherLog = session.logs.get(vis[i].id);
+      if (!otherLog) continue;
+      const result = alignLogToReference(refLog, otherLog);
+      if (result.signal === 'none') {
+        skipped += 1;
+        continue;
+      }
+      session.setTimeOffset(otherLog.id, refOffset + result.offsetSec);
+      aligned += 1;
+      if (result.ncc < 0.4 || result.peakRatio < 1.5) lowConfidence += 1;
+    }
+    const parts: string[] = [];
+    parts.push(`aligned ${aligned}`);
+    if (skipped > 0) parts.push(`${skipped} skipped (no gyro)`);
+    if (lowConfidence > 0) parts.push(`${lowConfidence} low conf`);
+    setStatus(parts.join(' · '));
+  } finally {
+    isAligning.value = false;
+  }
+}
+
+const autoAlignTooltip = computed(() => {
+  if (!canAutoAlign.value) return 'auto-align needs ≥ 2 visible logs';
+  const refName = visibleEntries.value[0]?.name ?? 'first visible';
+  return `Auto-align every visible log to ${refName} via gyro cross-correlation`;
+});
+
+onUnmounted(() => {
+  if (statusClearTimer !== null) clearTimeout(statusClearTimer);
+});
 </script>
 
 <template>
@@ -308,5 +397,52 @@ const familyLegend = computed(() => LOG_FAMILIES.map((f) => f.name).join(' · ')
     >
       +
     </button>
+
+    <!-- M1.7.1 auto-align — gyro cross-correlation against first
+         visible log. Visible at N≥2 visible logs. Disabled mid-run. -->
+    <button
+      v-if="canAutoAlign"
+      type="button"
+      class="ml-1 flex items-center gap-1.5 px-2 py-1 border border-bp-line-2 bg-bp-surface-2 font-mono text-[10.5px] cursor-pointer transition-colors"
+      :class="isAligning
+        ? 'text-bp-ink-3 cursor-wait'
+        : 'text-bp-ink-2 hover:text-bp-accent hover:border-bp-accent'"
+      :title="autoAlignTooltip"
+      :disabled="isAligning"
+      :aria-busy="isAligning"
+      @click="onAutoAlign"
+    >
+      <!-- Crosshair / target icon: two perpendicular lines + center
+           dot. Reads as "snap to / align" without needing a label. -->
+      <svg
+        width="13"
+        height="13"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <circle cx="8" cy="8" r="5.5" />
+        <line x1="8" y1="0.5" x2="8" y2="3.5" />
+        <line x1="8" y1="12.5" x2="8" y2="15.5" />
+        <line x1="0.5" y1="8" x2="3.5" y2="8" />
+        <line x1="12.5" y1="8" x2="15.5" y2="8" />
+        <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      </svg>
+      {{ isAligning ? 'aligning…' : 'auto-align' }}
+    </button>
+
+    <!-- Brief status surface after an auto-align run (clears after
+         ~4.5 s). Surfaces low-confidence + skipped counts so the user
+         knows when manual adjustment may be needed. -->
+    <span
+      v-if="lastAlignStatus !== null"
+      class="ml-2 self-center font-mono text-[10px] text-bp-ink-3"
+    >
+      {{ lastAlignStatus }}
+    </span>
   </div>
 </template>
