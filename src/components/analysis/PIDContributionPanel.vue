@@ -12,11 +12,11 @@
 // pinned cursor overlay arrives via useChartPinnedCursor, same as the
 // other time-domain panels.
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch, watchEffect } from 'vue';
 import { storeToRefs } from 'pinia';
 import type { AlignedData, Options, Series } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
@@ -121,9 +121,9 @@ function symmetric(min: number, max: number): [number, number] {
 const selectedAxis = ref<AxisId>(0);
 const axisSpec = computed(() => AXES[selectedAxis.value]);
 
-const logStore = useLogStore();
+const logStore = useActiveLog();
 const view = useViewStore();
-const { time, fields, hydrating } = storeToRefs(logStore);
+const { time, fields, hydrating, activeId } = logStore;
 // hiddenSeries must be destructured BEFORE the opts computed below,
 // because opts reads isHidden() (axes[2].show), and any sync read of
 // opts.value during setup would TDZ on hiddenSeries otherwise.
@@ -318,10 +318,19 @@ function fieldKeyFor(id: PIDFSTerm | ReferenceId): string {
 }
 
 function isHidden(id: PIDFSTerm | ReferenceId): boolean {
-  return hiddenSeries.value.has(fieldKeyFor(id));
+  if (!activeId.value) return false;
+  return view.isSeriesHidden(activeId.value, fieldKeyFor(id));
+}
+
+/** Compose the active-log-prefixed key for direct hiddenSeries
+ *  manipulation. The solo path needs raw key access (multi-key
+ *  flip in one Set replacement) so the helpers don't suffice. */
+function prefixedKey(field: string): string {
+  return `${activeId.value}:${field}`;
 }
 
 function onChipClick(term: PIDFSTerm, ev: MouseEvent) {
+  if (!activeId.value) return;
   const myField = fieldNameFor(term, selectedAxis.value);
   if (ev.shiftKey) {
     // Solo: hide every present term except this one. If we're already
@@ -330,27 +339,30 @@ function onChipClick(term: PIDFSTerm, ev: MouseEvent) {
     const otherFields = presentTerms.value
       .filter((t) => t.term !== term)
       .map((t) => fieldNameFor(t.term, selectedAxis.value));
+    const myKey = prefixedKey(myField);
+    const otherKeys = otherFields.map(prefixedKey);
     const alreadySoloed =
-      !hiddenSeries.value.has(myField) &&
-      otherFields.every((f) => hiddenSeries.value.has(f));
+      !hiddenSeries.value.has(myKey) &&
+      otherKeys.every((k) => hiddenSeries.value.has(k));
     const next = new Set(hiddenSeries.value);
     if (alreadySoloed) {
       // restore: clear hidden for this axis's terms
-      for (const f of [myField, ...otherFields]) next.delete(f);
+      for (const k of [myKey, ...otherKeys]) next.delete(k);
     } else {
-      next.delete(myField);
-      for (const f of otherFields) next.add(f);
+      next.delete(myKey);
+      for (const k of otherKeys) next.add(k);
     }
     view.hiddenSeries = next;
   } else {
-    view.toggleSeries(myField);
+    view.toggleSeries(activeId.value, myField);
   }
 }
 
 function onRefChipClick(id: ReferenceId) {
   // Refs don't participate in shift-solo — they're reference overlays,
   // not PIDFS contributors. Simple click-to-toggle.
-  view.toggleSeries(fieldKeyFor(id));
+  if (!activeId.value) return;
+  view.toggleSeries(activeId.value, fieldKeyFor(id));
 }
 
 function syncSeriesVisibility() {
@@ -365,9 +377,24 @@ function syncSeriesVisibility() {
   }
 }
 
-watch(plot.ready, (isReady) => { if (isReady) syncSeriesVisibility(); }, { immediate: true });
-watch(hiddenSeries, syncSeriesVisibility);
-watch(presentTerms, syncSeriesVisibility, { deep: false });
+// watchEffect auto-tracks every reactive read inside syncSeriesVisibility
+// (presentTerms/Refs, hiddenSeries via isHidden, activeId via isHidden,
+// plot.updateCount via the explicit touch below). This handles every
+// state change that could affect series visibility:
+//   · chip click → hiddenSeries
+//   · eye toggle → activeId (and thus isHidden)
+//   · axis switch → presentTerms / presentRefs
+//   · uPlot rebuild on opts/data change → plot.updateCount (default
+//     show=true on every new series; need to re-apply visibility)
+watchEffect(() => {
+  if (!plot.ready.value) return;
+  // Explicit dep so we re-fire after uPlot rebuilds, which reset
+  // every series.show to true. Skipped when updateCount isn't
+  // exposed (defensive — the cast keeps TS happy across composable
+  // versions).
+  void (plot as { updateCount?: { value: number } }).updateCount?.value;
+  syncSeriesVisibility();
+});
 
 function selectAxis(id: AxisId) {
   selectedAxis.value = id;

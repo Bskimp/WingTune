@@ -13,7 +13,7 @@
 //
 // The chosen-file flow wraps Tauri's fs `readFile` bytes in a real
 // browser File object so the rest of the load pipeline
-// (`useLogStore.loadFile(file)`) doesn't need to branch on platform.
+// (`session.addLog(file)`) doesn't need to branch on platform.
 
 /** True when running inside a Tauri webview (desktop shell), false in
  *  a plain browser. Tauri 2.x injects `__TAURI_INTERNALS__` onto

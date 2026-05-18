@@ -11,12 +11,17 @@
 
 ## Status
 
-Not started. Design pass complete (this doc) — slice 1 is the
-natural pickup point for the next session. Should be executable
-cold from this doc + the project skills.
+**COMPLETE 2026-05-17** — shipped in one full-day session. The
+slice plan below was followed in spirit with a couple of pragmatic
+deviations (documented inline + summarised under "Deviations from
+plan" at the bottom). Test results: 137/137 unit + 5/5 wasm tests
+pass. Browser-verified on Brian's btfl_001/002/008 corpus.
 
-**Estimated total: 3.5–4.5 days** for M1.7 MVP, plus ~1.5–2 days
-for M1.7.1 time alignment follow-up.
+**M1.7.1 time-alignment follow-up:** scaffold shipped (the
+`useAlignedTime` composable + per-log `timeOffsetSec` field on
+LogState + 6-case test suite). Remaining work is the drag-to-align
+UI handle + adopting the composable in at least one chart panel —
+estimated ~1.5–2 days when picked up.
 
 ## What this milestone is for
 
@@ -338,3 +343,88 @@ Time alignment, tuning diff panel, session persistence, live FC,
 per-panel log selection. None of these are part of M1.7. The
 first two have explicit deferral lanes (M1.7.1 / HeaderParamsPanel
 polish slice). The others are whole-project out-of-scope.
+
+## Deviations from plan (appendix — what actually shipped)
+
+The slice plan above was followed in spirit. These are the
+pragmatic deviations applied during the build session:
+
+1. **Worker tenancy: multi-tenant chosen over N-workers.** The
+   "Open questions" note above guessed N-handles-per-worker; the
+   actual JS-side change was a one-line `let logBytes` → `Map<logId,
+   Uint8Array>` in `parser.worker.ts` plus `logId` added to
+   `ScanRequest`/`HydrateRequest` + a new `CloseRequest`. Cleaner
+   long-term than per-LogState ParserClient instances. See
+   [[project-m17-multi-log-architecture]] for the decision context.
+
+2. **Slice 2 (FileDropZone add-not-replace) collapsed into the
+   LogRoster "+" button.** `App.vue` unmounts FileDropZone as soon
+   as `hasLog` flips true, so a drop-while-loaded path never had a
+   target. The roster's "+" button calls `session.addLog(file)`
+   directly (no reset) — that's the multi-log entry surface.
+
+3. **Slice 4 (per-log paired colors) folded in alongside slice 1
+   foundations.** `src/lib/logColors.ts` with `LOG_FAMILIES` palette
+   + `familyForIndex()` + `tintTowardFamily()` HSL helper landed
+   in Push 3a so the roster chips had family dots from day one.
+   Chart-side per-(log×axis) tinting landed in Push 3b alongside
+   the panel iteration rewrites.
+
+4. **Eye-as-focus pattern emerged from the verification step.**
+   Original plan was to leave panels active-log-only and let the
+   chart overlay carry comparison. After Brian saw the busy N=3
+   overlay on Servos, we added the eye toggle to mass-hide a log,
+   AND changed `useActiveLog` to return the FIRST VISIBLE log
+   (skipping `view.hiddenLogs`). Now every panel reading
+   `useActiveLog` (chips, sat strips, FlightStrip, ReadinessCard,
+   cursor readouts) auto-re-anchors when the user eye-toggles —
+   the toggle is both visibility AND focus. This is the
+   load-bearing UX for multi-log work; see
+   [[project-m17-multi-log-architecture]].
+
+5. **RecommendTab gets a pager, not cross-log aggregation.** Per
+   scope conversation 2026-05-17, multi-log rec presentation was
+   deferred. The minimal viable surface is a "log i of N ← →"
+   header. Pager state is local to RecommendTab and independent
+   of the eye toggle (recs are a per-log artifact you flip through
+   sequentially, not focus-coupled).
+
+6. **Visibility-sync mechanism: `watchEffect`, not fixed-dep
+   `watch`.** Bug surfaced during browser verification — PID/Servo
+   chart visibility got stuck after eye-toggle because the old
+   fixed-dep watch didn't include `activeId` or `plot.updateCount`.
+   Every chart panel's `syncSeriesVisibility` now runs inside a
+   `watchEffect` so it auto-fires on any reactive read inside.
+   Documented in [[project-m17-multi-log-architecture]] as a
+   pattern for future chart panels.
+
+7. **Stat-strip + chip rendering anchored to active log on Servos
+   + Step**, not per-log columns. Per-log expansion explodes
+   vertical space at N≥3; the eye-as-focus pattern handles
+   per-log inspection ("eye-off the others to focus on this one's
+   chips/strips"). Listed in the panel headers as
+   "chips + saturation strips show active log only" so the user
+   understands the model.
+
+8. **`useAlignedTime` scaffold shipped as Push 3c polish**, not
+   as M1.7.1 follow-up. The math composable + 6-case test suite
+   live at `src/composables/useAlignedTime.ts` + `tests/unit/
+   useAlignedTime.test.ts`. No UI uses it yet — M1.7.1 is just
+   the drag-handle wiring + adopting the composable in one panel.
+
+9. **Session store reactivity gotcha:** LogState objects had to
+   be `shallowReactive`-wrapped at creation. Without this,
+   property mutations on plain objects inside the `shallowReactive`
+   Map don't fire reactivity (Map tracks set/delete only). Caused
+   a "drop log → nothing happens" bug during Push 1 verification;
+   fix added to `createEmptyLogState`. See
+   [[project-m17-multi-log-architecture]] for the precedent.
+
+Acceptance criteria from the slice plan all met:
+- ✅ Single-log behaviour identical to today
+- ✅ Loading a second log adds it as a peer (does not replace)
+- ✅ Every panel renders multi-log content per the design
+- ✅ Cursor readout updates per active log (via eye-as-focus)
+- ✅ 137/137 unit tests pass; 6 new tests added for useAlignedTime
+
+Final commit: see git log for the M1.7 close-out commits.

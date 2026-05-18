@@ -37,17 +37,18 @@
 
 Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
 M1 functionally complete (corpus track aside). **Wing analytics
-suite (M2 / M3 / M5 / M6 / M7) now complete** — M2 PIDFS decomp,
-M3 BASIC airspeed fit, M4 spectrum + filter analysis, M-Step closed-
-loop deconvolution (calibrated against PIDscope), M5 HYPERBOLIC TPA
-curve fitter (the previously-deferred module), M6 SPA effectiveness
-analyzer, M7 S-term TPA effectiveness viz, M1.5 deeper BBL header
-inspector — all shipped with their panels + recommenders + tests.
-Tauri shell native file open + LRU field-cache eviction +
-estimated scan-progress bar + airspeed-predicate split also landed.
-Generic Nelder-Mead extracted to `lib/nelderMead.ts` and shared by
-`airspeedFit` and `tpaCurveFit`. M3 / M5 / M6 / M7 visual validation
-all deferred (need calibration flights with the right debug modes).
+suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M1.7 multi-log
+compare all shipped.** From this point forward the project is
+**polish + Brian-blocked** (visual-validation calibration flights
+for M3/M5/M6/M7, upstream `blackbox-log` PR, step-response amplitude
+calibration vs PIDscope, M1.7.1 time-alignment UI). M1.7 landed
+2026-05-17: multi-tenant Web Worker, session store, every panel
+migrated off the legacy single-log shim, LogRoster strip with
+family colors + eye-as-focus, Spectrum/Servos/Step iterate
+`session.logs.values()` with HSL-tinted per-(log×axis) traces,
+RecommendTab "log i of N" pager, `useAlignedTime` scaffold for
+the M1.7.1 alignment UI. See [[project-m17-multi-log-architecture]]
+memory for the load-bearing design decisions.
 
 **Done:**
 
@@ -284,6 +285,75 @@ all deferred (need calibration flights with the right debug modes).
   memory: per-servo drill-down (asymmetric linkage), airspeed-
   loaded lag bins (requires DEBUG_TPA flight), deadband + slew-
   ceiling detection (better as bench-test workflow).
+- **M1.7 multi-log compare (one full-day session 2026-05-17)** —
+  See `docs/wingtune-m1.7-execution.md` for the execution plan +
+  what shipped vs deviated, and [[project-m17-multi-log-architecture]]
+  for the load-bearing design decisions. High-level breakdown:
+    · **Foundation**: `parser.worker.ts` is multi-tenant
+      (`Map<logId, Uint8Array>` byte cache + per-call routing);
+      `wasmBridge.ts` ParserClient takes `logId` on scan/hydrate +
+      new `closeLog(id)`. New `src/stores/session.ts` with
+      `LogState` (id/name/scanReport/time/fields/.../timeOffsetSec)
+      wrapped in `shallowReactive` so post-construction property
+      writes fire reactivity (latent bug — see
+      [[project-m17-multi-log-architecture]]).
+    · **Panel migration**: legacy `src/stores/log.ts` deleted; new
+      `src/composables/useActiveLog.ts` projects "first VISIBLE log"
+      as a single-log handle (eye-toggle off the focused log →
+      composable falls through to the next visible one, so
+      FlightStrip/ReadinessCard/cursor-readout/etc. re-anchor).
+      22 panels migrated to either useActiveLog or direct session
+      iteration. AnalysisView eager-pin uses `watchEffect` over
+      `session.logs` with a per-logId `eagerlyHydrated` Set.
+    · **Multi-log UX**: `src/lib/logColors.ts` (3-family palette
+      warm/cool/neutral with HSL `tintTowardFamily()`). New
+      `src/components/LogRoster.vue` between TabBar + TimeBar
+      (visible at N≥1): family-color chips + filename + cycle
+      warning at N>3 + eye toggle (inline SVG, slash overlay when
+      hidden) + remove (X) + trailing "+" button calling
+      `session.addLog` directly (no reset — additive).
+    · **View store key migration**: `hiddenSeries` keys now
+      `${logId}:${field}`; new helpers `toggleSeries(logId, field)`,
+      `toggleSeriesForAllLogs(field, logIds)`,
+      `isSeriesHidden(logId, field)`, `isSeriesHiddenForAllLogs(field, logIds)`,
+      plus separate `hiddenLogs` Set + `toggleLogVisibility(logId)` +
+      `isLogHidden(logId)` for the eye toggle.
+    · **Compare-priority panel rewrites**: SpectrumPanel /
+      ServoPanel / StepResponsePanel iterate `session.logs.values()`,
+      build per-(log×axis) traces with `tintTowardFamily(axisHue,
+      family)` strokes, pad shorter logs' arrays with NaN to a
+      shared reference x-axis. Per-axis chips call
+      `toggleSeriesForAllLogs` so a single R/P/Y click affects
+      every loaded log. Imperatively-applied series visibility
+      uses `watchEffect` (not fixed-dep `watch`) so it auto-fires
+      on activeId / hiddenSeries / plot.updateCount changes —
+      otherwise the chart drifts from chip state after eye-toggle
+      or uPlot rebuild.
+    · **RecommendTab pager**: at N≥2 a "showing recs for <name> ·
+      log i of N ← →" header lets the user step through logs one
+      at a time. Local `selectedIndex` ref, clamps on log removal.
+      Independent of the eye toggle (recs are per-log; cross-log
+      aggregation deferred per scope decision).
+    · **M1.7.1 scaffold**: `src/composables/useAlignedTime.ts`
+      exposes `toSessionTime(localT)` / `toLogTime(sessionT)` /
+      `alignedCursor` for a given logId via `LogState.timeOffsetSec`.
+      Convention: `sessionTime = logTime + offset`. 6-case test
+      suite at `tests/unit/useAlignedTime.test.ts` covers
+      identity, signed offsets, unknown-logId nulls, cursor
+      projection, log-removal reactivity. No UI wired yet — that's
+      M1.7.1 work.
+    · **Edge cases hit + fixed during verification**: (1) all-eyes-off
+      was returning user to drop zone — fixed by gating
+      `App.vue`'s `hasLog` on `session.logs.size > 0` not on
+      `scanReport != null`; (2) PID + Servo chart visibility lost
+      sync after eye-toggle because old `watch([hiddenSeries,
+      presentTerms], ...)` didn't include activeId/plot.updateCount
+      — switched to `watchEffect`.
+    · **Test results**: 137/137 unit tests pass (6 new for
+      useAlignedTime). 5/5 wasm-binding tests pass against
+      btfl_002.bbl seed. `tests/wasm-binding/entry-flow.test.ts`
+      updated to seed via `session.__test_seedLog({...})` instead
+      of writing legacy-store refs.
 
 **In flight / pending:**
 
@@ -367,15 +437,20 @@ all deferred (need calibration flights with the right debug modes).
       `latency 50%`. Cross-check expected: btfl_002 should drop
       from peak 335% toward 1.3-2.0 range.
 - M1.0 corpus assembly track (not started).
-- M1.7 multi-log compare (not started — ~1 week). Scope reduced
-  from "multi-log + session persistence" 2026-05-17: persistence
-  dropped. Tuning sessions are one-shot (drop log, analyse, fly
-  again) — re-opening the same log next session is rare, the
-  recommender CLI text is already pastable, and OS-level "recent
-  files" covers the marginal case. Multi-log compare alone has
-  real value (A/B before/after a tune change, cross-flight PIDFS
-  share trends, spectrum overlay across filter changes); that's
-  the M1.7 scope going forward.
+- **M1.7.1 time-alignment UI** (~1.5-2 days, scaffold already
+  shipped). What's left:
+    · Drag handle in the LogRoster (per-chip) wired to
+      `session.setTimeOffset(id, x)` — the per-log offset field
+      already exists on LogState (default 0).
+    · Adopt `useAlignedTime(logId)` in at least one chart panel
+      that renders multiple logs against a shared cursor — likely
+      SpectrumPanel or StepResponsePanel, projecting the cursor
+      via `alignedCursor.value` so each log's data indexes off
+      its own aligned time.
+    · Optional: auto-alignment heuristics (first-arm event,
+      first-mode-change, GPS time sync) — math + tests live in
+      `tests/unit/useAlignedTime.test.ts` for the manual-offset
+      case already.
 - Upstream `blackbox-log` PR (held by Brian).
 
 **Explicitly out of scope (won't build):**
@@ -386,19 +461,18 @@ all deferred (need calibration flights with the right debug modes).
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** M1.7 multi-log
-compare slice 1 (session store refactor). With M-Servo MVP
-shipped, M1.7 is now the only remaining concrete code item that
-isn't flight-blocked or held-on-Brian. Scope reduced
-(~3.5-4.5 days for MVP, no persistence, no MSP/live-FC, no
-TuningDiffPanel, no time alignment in MVP — see
-`docs/wingtune-m1.7-execution.md` for the full slice plan +
-locked scope decisions). One-of-N store model picked over focus+
-siblings to match the survey-style tuning workflow (all loaded
-logs are peers). Slice 1 is the foundation refactor; slices 2–5
-are independent after that. Time alignment lives in a follow-up
-M1.7.1 (~1.5-2 days). Everything else either needs flight data,
-is held on Brian's call (upstream PR), or is a polish lift.
+**Immediate next step when resuming code work:** M1.7.1 time-alignment
+UI. M1.7 multi-log compare shipped 2026-05-17 in one full-day
+session (foundation + multi-log UX + compare panels + RecommendTab
+pager + useAlignedTime scaffold + 6 new tests, all 137/137 unit +
+5/5 wasm green). M1.7.1 is the natural pickup point — the math
+composable + per-log `timeOffsetSec` field + 6-case test suite
+are already in place, so the slice is "drag handle in LogRoster
++ adopt `useAlignedTime` in one compare panel" (~1.5-2 days).
+Everything else is flight-blocked (M3/M4/M5/M6/M7 visual validation
+needs calibration sorties with the right debug modes), held on
+Brian's call (upstream `blackbox-log` PR), or held on PIDscope
+side-by-side (step-response amplitude calibration).
 
 ## Cardinal rules
 

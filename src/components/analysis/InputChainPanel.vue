@@ -15,9 +15,8 @@
 // signal for stage B and stage C correlation.
 
 import { computed, onMounted, ref, watch } from 'vue';
-import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import {
   computeInputChain,
   buildPerAxisServoAggregate,
@@ -95,8 +94,8 @@ function lagText(ms: number): string {
   return Number.isFinite(ms) ? `${ms.toFixed(0)} ms` : '—';
 }
 
-const logStore = useLogStore();
-const { scanReport, time, fields, hydrating } = storeToRefs(logStore);
+const logStore = useActiveLog();
+const { scanReport, time, fields, hydrating } = logStore;
 
 onMounted(() => { logStore.ensureFields(REQUIRED_FIELDS); });
 

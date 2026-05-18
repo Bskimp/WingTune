@@ -1,26 +1,32 @@
 <script setup lang="ts">
-// Entry-page file-drop frame — four visual states wired to the log store:
+// Entry-page file-drop frame — four visual states wired to the session
+// store:
 //
 //   EMPTY     — no file loaded, no drag in progress
 //   STAGED    — drag is over the zone (about to drop)
-//   DECODING  — store is scanning (post-drop, pre-result)
+//   DECODING  — session is scanning (post-drop, pre-result)
 //   REJECTED  — scan failed; surface the error and offer retry
 //
-// Calls `useLogStore().loadFile(file)` on drop or file-picker selection.
-// The store owns all parser state; this component only renders + collects
-// the file and delegates. Per `wingtune-architecture`, no WASM call lands
-// here.
+// On drop / file-pick the zone resets the session (single-log entry
+// flow: dropping a new log replaces the prior one) and calls
+// `session.addLog(file)`. The session store owns all parser state;
+// this component only renders + collects the file and delegates.
+// Per `wingtune-architecture`, no WASM call lands here.
+//
+// Push-3 note: when multi-log "add" semantics ship, the reset step
+// disappears for N≥1 — drop becomes additive. The replace-on-drop
+// behavior here is intentional for the single-log entry surface.
 
 import { computed, ref } from 'vue';
-import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useSessionStore } from '@/stores/session';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { isTauri, pickAndOpenLogFile } from '@/lib/tauriBridge';
 import IconUpload from '@/components/icons/IconUpload.vue';
 import IconFile from '@/components/icons/IconFile.vue';
 
-const logStore = useLogStore();
-const { scanning, scanError, scanProgress, fileName, fileSize } = storeToRefs(logStore);
+const session = useSessionStore();
+const { scanning, scanError, scanProgress, fileName, fileSize } = useActiveLog();
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const isDragging = ref(false);
@@ -113,9 +119,14 @@ async function onFilePick(ev: Event) {
 async function accept(file: File) {
   stagedFile.value = file;
   try {
-    await logStore.loadFile(file);
+    // Single-log entry-flow semantics: drop replaces the prior log.
+    // The session's reset clears any existing log + releases its
+    // worker-side bytes before the new addLog kicks off.
+    session.reset();
+    await session.addLog(file);
   } catch {
-    // store keeps the error in `scanError`; UI surfaces from there.
+    // session.lastScanError populated inside addLog; UI surfaces it
+    // via the `scanError` computed exposed by useActiveLog.
   } finally {
     stagedFile.value = null;
   }
@@ -135,12 +146,12 @@ async function openNativePicker() {
     // pickAndOpenLogFile rejects only on fs.readFile failure
     // (file deleted mid-flow, permission denied). Route through
     // the same scanError surface as a failed scan.
-    logStore.setScanError(err);
+    session.lastScanError = err;
   }
 }
 
 function dismissError() {
-  logStore.reset();
+  session.reset();
 }
 </script>
 

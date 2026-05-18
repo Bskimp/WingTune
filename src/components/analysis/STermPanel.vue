@@ -18,10 +18,9 @@
 // whether their tuning is taking effect on the S-term in particular.
 
 import { computed, onMounted, ref, watch } from 'vue';
-import { storeToRefs } from 'pinia';
 import type { AlignedData, Options } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useUPlot } from '@/composables/useUPlot';
 import { evaluateModules } from '@/lib/capabilityPredicates';
 import { resolveSignal } from '@/lib/signalRegistry';
@@ -52,8 +51,8 @@ const AXES: AxisSpec[] = [
 
 const selectedAxis = ref<0 | 1 | 2>(0);
 
-const logStore = useLogStore();
-const { time, fields, hydrating, scanReport } = storeToRefs(logStore);
+const logStore = useActiveLog();
+const { time, fields, hydrating, scanReport } = logStore;
 
 const axisSpec = computed(() => AXES[selectedAxis.value]);
 

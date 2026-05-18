@@ -10,10 +10,9 @@
 // non-DEBUG_TPA logs show the "set debug_mode = TPA" message.
 
 import { computed, onMounted, ref, watch } from 'vue';
-import { storeToRefs } from 'pinia';
 import type { AlignedData, Options } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useUPlot } from '@/composables/useUPlot';
 import { evaluateModules } from '@/lib/capabilityPredicates';
 import { resolveSignal } from '@/lib/signalRegistry';
@@ -32,8 +31,8 @@ const COLORS = {
   curve:  '#7ee0a8',
 } as const;
 
-const logStore = useLogStore();
-const { time, fields, hydrating, scanReport } = storeToRefs(logStore);
+const logStore = useActiveLog();
+const { time, fields, hydrating, scanReport } = logStore;
 
 const argField = computed(() => {
   const cap = scanReport.value?.capability;

@@ -7,9 +7,8 @@
 // silent).
 
 import { computed } from 'vue';
-import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import DataDivider from '@/components/DataDivider.vue';
 import IconCheck from '@/components/icons/IconCheck.vue';
 
@@ -20,8 +19,8 @@ type Row = {
   note: string;
 };
 
-const logStore = useLogStore();
-const { scanReport } = storeToRefs(logStore);
+const logStore = useActiveLog();
+const { scanReport } = logStore;
 
 const rows = computed<Row[]>(() => {
   const r = scanReport.value;

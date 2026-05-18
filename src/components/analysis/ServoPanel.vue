@@ -4,25 +4,37 @@
 // the pusher under `motor[N]`; both are surfaced here so the user
 // sees the full set of physical actuators driving the airframe.
 //
-// Labels in M1.4:
-//   · `servo[N]` → "Servo N · unknown" (classifier-pending — the
-//     preset → correlation → user-override path lands in M2; see
-//     `project-servo-identification`)
-//   · `motor[N]` → "Motor N" (no classification needed — a motor is a
-//     motor; for a wing this is the pusher)
+// M1.7 Push 3b — multi-log: chart overlays traces from every loaded
+// log, each tinted toward its family color so per-log differences in
+// the same channel are visible side-by-side. Footer chips, saturation
+// strips, and stats remain anchored to the active (first) log because
+// per-log expansion of those would explode vertical space at N≥3.
+// Per-channel chips at the bottom toggle that single (active-log,
+// channel) — the multi-log mass-toggle path would need a per-channel
+// chip per log which gets unmanageable for 8 servos × 3 logs.
+//
+// Time axis caveat: all logs are plotted against the first (active)
+// log's time axis by sample index. For same-rate same-plane
+// comparison flights (Brian's primary use case — see corpus) this
+// aligns naturally. Mismatched sample rates or wall-clock alignment
+// is M1.7.1 work via `useAlignedTime`.
+//
+// Labels:
+//   · `servo[N]` → "Servo N · unknown" (or classified role + confidence
+//     mark via the preset → correlation → user-override path)
+//   · `motor[N]` → "Motor N" (a motor is a motor; no classifier)
 //
 // Servos render first so the actual control-surface channels are the
-// visual lead; motors follow.
-//
-// Saturation overlays (the design's SAT_R / SAT_P / SAT_Y windows) are
-// M2+ analytics — endpoint-saturation detection is a derived signal,
-// not raw data. Not mocked here.
+// visual lead; motors follow. Multi-log traces inherit this ordering
+// per log.
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watchEffect } from 'vue';
 import { storeToRefs } from 'pinia';
 import type { AlignedData, Options, Series } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useSessionStore, type LogState } from '@/stores/session';
+import { useActiveLog } from '@/composables/useActiveLog';
+import type { ScanReport } from '@/lib/wasmBridge';
 import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
@@ -34,33 +46,30 @@ import {
   ROLE_LABELS,
   type ClassifiedChannel,
 } from '@/lib/servoClassifier';
+import {
+  familyForIndex,
+  tintTowardFamily,
+  type FamilySpec,
+} from '@/lib/logColors';
 
-// Cycle of Blueprint-compatible colors per channel. uPlot needs concrete
-// CSS strings; keep in sync with tailwind.css @theme block. The first
-// four match accent / warn / ok / stamp so primary channels read clearly;
-// further channels fall back to ink-2 tones.
-const CHANNEL_COLORS = [
-  '#7ec8ff', // accent  — typically channel 0 (often throttle on conventional, elevon-L on delta)
-  '#ffc46a', // warn    — typically channel 1
-  '#6ed3a0', // ok      — typically channel 2
-  '#ff8a7a', // stamp   — typically channel 3
-  '#b6c7e0', // ink-2   — channel 4+
-  '#7a90b0', // ink-3
+// Per-axis-hue cycle for channels. Each log's channels start from this
+// cycle and then tinted toward the log's family color.
+const CHANNEL_BASE_COLORS = [
+  '#7ec8ff',
+  '#ffc46a',
+  '#6ed3a0',
+  '#ff8a7a',
+  '#b6c7e0',
+  '#7a90b0',
 ] as const;
 
-const MAX_CHANNELS = 16; // Wing builds rarely exceed this; defensive cap.
-
-// BF declares fixed-size servo arrays in the log header (MAX_SUPPORTED_
-// SERVOS), so a 2-servo elevon will still see `servo[0..7]` listed as
-// present. Unwired channels sit at zero (caught by sample_check) or at
-// PWM midpoint (not caught by sample_check). We post-hydration filter
-// any channel whose total PWM range is below this threshold. 10 µs is
-// well under any meaningful servo movement but well above sensor jitter.
+const MAX_CHANNELS = 16;
 const RANGE_THRESHOLD_PWM = 10;
 
-const logStore = useLogStore();
+const session = useSessionStore();
 const view = useViewStore();
-const { time, fields, hydrating, scanReport } = storeToRefs(logStore);
+const activeLog = useActiveLog();
+const { time, fields, hydrating, scanReport } = activeLog;
 
 type ChannelKind = 'servo' | 'motor';
 
@@ -69,25 +78,46 @@ type ChannelSpec = {
   index: number;
   kind: ChannelKind;
   label: string;
+  /** Base color (untinted). Per-log render tints this toward the
+   *  log family. The active-log footer chips use this raw. */
   color: string;
 };
 
-// Pull every `servo[i]` and `motor[i]` field the scan report identified,
-// servos first so they lead the visual stack.
-const channels = computed<ChannelSpec[]>(() => {
-  const r = scanReport.value;
-  if (!r) return [];
+interface LogEntry {
+  log: LogState;
+  family: FamilySpec;
+  hidden: boolean;
+}
+
+const logEntries = computed<LogEntry[]>(() => {
+  const out: LogEntry[] = [];
+  let idx = 0;
+  for (const log of session.logs.values()) {
+    out.push({
+      log,
+      family: familyForIndex(idx),
+      hidden: view.isLogHidden(log.id),
+    });
+    idx += 1;
+  }
+  return out;
+});
+
+const visibleEntries = computed(() =>
+  logEntries.value.filter((e) => !e.hidden),
+);
+
+/** Detect servo/motor channels from a scan report's fields_present.
+ *  Servos first (by index), then motors. */
+function channelsFromReport(report: ScanReport): ChannelSpec[] {
   const pattern = /^(servo|motor)\[(\d+)\]$/;
-  const raw = r.capability.fields_present
+  const raw = report.capability.fields_present
     .map((name) => ({ name, m: pattern.exec(name) }))
     .filter((x): x is { name: string; m: RegExpExecArray } => x.m !== null);
-
   raw.sort((a, b) => {
-    // servos before motors, then by index
     if (a.m[1] !== b.m[1]) return a.m[1] === 'servo' ? -1 : 1;
     return Number(a.m[2]) - Number(b.m[2]);
   });
-
   return raw.slice(0, MAX_CHANNELS).map(({ name, m }, i) => {
     const kind = m[1] as ChannelKind;
     const idx = Number(m[2]);
@@ -95,48 +125,57 @@ const channels = computed<ChannelSpec[]>(() => {
       fieldName: name,
       index: idx,
       kind,
-      // Servo labels surface the classifier-pending "unknown" state;
-      // motors don't need a classifier (a motor is a motor) so they
-      // just get the index.
       label: kind === 'servo' ? `Servo ${idx} · unknown` : `Motor ${idx}`,
-      color: CHANNEL_COLORS[i % CHANNEL_COLORS.length],
+      color: CHANNEL_BASE_COLORS[i % CHANNEL_BASE_COLORS.length],
     };
   });
-});
-
-async function hydrateAllChannels() {
-  const names = channels.value.map((c) => c.fieldName);
-  // Also pull setpoint[0..2] for the correlation-based servo classifier.
-  // These are main-frame fields and present on essentially every wing
-  // log; if any is missing the classifier falls back to 'unclassified'
-  // which is the honest empty state.
-  const setpointFields = ['setpoint[0]', 'setpoint[1]', 'setpoint[2]'];
-  const all = [...names, ...setpointFields];
-  if (all.length === 0) return;
-  await logStore.ensureFields(all);
 }
 
-onMounted(hydrateAllChannels);
-watch(channels, hydrateAllChannels, { deep: false });
+// Active log's channels — drives the footer chip row and saturation
+// strips. Multi-log overlays read per-log channels independently.
+const channels = computed<ChannelSpec[]>(() =>
+  scanReport.value ? channelsFromReport(scanReport.value) : [],
+);
+
+// Eager-hydrate channel fields + setpoint refs for every loaded log.
+// Each log gets its own ensureFields call routed by logId.
+watchEffect(() => {
+  const setpointFields = ['setpoint[0]', 'setpoint[1]', 'setpoint[2]'];
+  for (const { log } of logEntries.value) {
+    if (!log.scanReport) continue;
+    const chans = channelsFromReport(log.scanReport);
+    const names = chans.map((c) => c.fieldName);
+    const all = [...names, ...setpointFields];
+    if (all.length === 0) continue;
+    session.ensureFields(log.id, all).catch(() => {
+      // Hydration failures are recorded on the log's scanError;
+      // the chart just renders without that log's data.
+    });
+  }
+});
+
+// Re-trigger hydration once on mount in case the watchEffect missed
+// the initial frame (shouldn't, but safe and free).
+onMounted(() => {
+  for (const { log } of logEntries.value) {
+    if (!log.scanReport) continue;
+    const all = channelsFromReport(log.scanReport).map((c) => c.fieldName);
+    if (all.length > 0) session.ensureFields(log.id, all).catch(() => {});
+  }
+});
 
 const isHydrating = computed(() =>
   channels.value.some((c) => hydrating.value.has(c.fieldName)),
 );
 
-// Pre-hydration we can't filter (no data yet); show every candidate so
-// the panel doesn't flicker between "8 channels loading" and the
-// filtered set. Once hydration lands, the range filter applies.
-const allHydrated = computed(() =>
+const allActiveHydrated = computed(() =>
   channels.value.length > 0 &&
   channels.value.every((c) => (fields.value.get(c.fieldName)?.length ?? 0) > 0),
 );
 
-// Channels that actually moved during the flight. Indexed-keyed cache
-// would be premature here — Vue's computed memoizes by dep tracking
-// and only re-evaluates if fields changes, which happens once per
-// hydration round.
+/** Active-log channels that actually moved (post-range filter). */
 const activeChannels = computed<ChannelSpec[]>(() => {
-  if (!allHydrated.value) return channels.value;
+  if (!allActiveHydrated.value) return channels.value;
   return channels.value.filter((c) => {
     const arr = fields.value.get(c.fieldName)!;
     let min = Infinity;
@@ -151,45 +190,33 @@ const activeChannels = computed<ChannelSpec[]>(() => {
 });
 
 const inactiveCount = computed(() =>
-  allHydrated.value ? channels.value.length - activeChannels.value.length : 0,
+  allActiveHydrated.value ? channels.value.length - activeChannels.value.length : 0,
 );
 
 const servoCount = computed(() => activeChannels.value.filter((c) => c.kind === 'servo').length);
 const motorCount = computed(() => activeChannels.value.filter((c) => c.kind === 'motor').length);
 
-const channelArrays = computed<Float32Array[]>(() =>
+const activeChannelArrays = computed<Float32Array[]>(() =>
   activeChannels.value.map((c) => fields.value.get(c.fieldName) ?? new Float32Array(0)),
 );
 
-// Per-channel saturation detection. Cheap (single pass over each PWM
-// array); recomputes whenever channels change. Recommender + strip
-// rendering both read from this.
 const saturationByChannel = computed<Map<string, SaturationResult>>(() => {
   const out = new Map<string, SaturationResult>();
   activeChannels.value.forEach((c, i) => {
-    const arr = channelArrays.value[i];
+    const arr = activeChannelArrays.value[i];
     if (!arr || arr.length === 0) return;
-    // Motors and servos both use 1000-2000 PWM range — same detection
-    // path. (If servo endpoint overrides via `servo_lowpwm_N` /
-    // `servo_highpwm_N` matter on a real log, look them up in
-    // header_params here.)
     out.set(c.fieldName, detectSaturation(arr));
   });
   return out;
 });
 
-// Classifier: maps every active servo channel to a role with a
-// confidence state. Preset matches → 'confident'; correlation-based
-// → 'inferred' (with score); no signal → 'unclassified'. Motors are
-// never classified (a motor is a motor) — the lookup just skips them.
 const classifications = computed<Map<string, ClassifiedChannel>>(() => {
   const r = scanReport.value;
   if (!r) return new Map();
-  // Only classify servo channels — motors don't need it.
   const servoMap = new Map<string, Float32Array>();
   activeChannels.value.forEach((c, i) => {
     if (c.kind !== 'servo') return;
-    const arr = channelArrays.value[i];
+    const arr = activeChannelArrays.value[i];
     if (arr && arr.length > 0) servoMap.set(c.fieldName, arr);
   });
   if (servoMap.size === 0) return new Map();
@@ -240,7 +267,6 @@ function confidenceTitle(c: ChannelSpec): string {
   }
 }
 
-// Aggregate "any channel pegged" pct for the header strip.
 const worstSaturationPct = computed(() => {
   let worst = 0;
   for (const r of saturationByChannel.value.values()) {
@@ -259,28 +285,89 @@ const worstSaturationTone = computed(() => {
 
 const ready = computed(() =>
   time.value.length > 0 &&
-  channelArrays.value.length > 0 &&
-  channelArrays.value.every((a) => a.length > 0),
+  activeChannelArrays.value.length > 0 &&
+  activeChannelArrays.value.every((a) => a.length > 0),
 );
 
-const data = computed<AlignedData>(() => {
-  if (!ready.value) {
-    const empties = activeChannels.value.map(() => new Float32Array(0));
-    return [new Float32Array(0), ...empties] as unknown as AlignedData;
+interface LogChannelTrace {
+  entry: LogEntry;
+  chans: ChannelSpec[];
+  arrs: Float32Array[];
+}
+
+/** Per-log trace bundle for the chart. Each visible log contributes its
+ *  own (post-range-filter) channel list. Channel arrays are aligned by
+ *  index against the active log's time axis — see panel header for the
+ *  same-rate caveat. */
+const allTraces = computed<LogChannelTrace[]>(() => {
+  const out: LogChannelTrace[] = [];
+  for (const entry of visibleEntries.value) {
+    if (!entry.log.scanReport) continue;
+    const chans = channelsFromReport(entry.log.scanReport);
+    // post-range filter, mirrors activeChannels logic
+    const arrs: Float32Array[] = [];
+    const kept: ChannelSpec[] = [];
+    for (const c of chans) {
+      const arr = entry.log.fields.get(c.fieldName);
+      if (!arr || arr.length === 0) continue;
+      let min = Infinity, max = -Infinity;
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      if ((max - min) <= RANGE_THRESHOLD_PWM) continue;
+      kept.push(c);
+      arrs.push(arr);
+    }
+    out.push({ entry, chans: kept, arrs });
   }
-  return [time.value, ...channelArrays.value] as unknown as AlignedData;
+  return out;
+});
+
+/** Longest time axis among visible logs (used as the chart x). Shorter
+ *  logs' channel data gets NaN-padded past their end so uPlot doesn't
+ *  draw a wrap. */
+const refTime = computed<Float32Array>(() => {
+  let best = activeLog.time.value;
+  for (const { log } of visibleEntries.value) {
+    if (log.time.length > best.length) best = log.time;
+  }
+  return best;
+});
+
+const data = computed<AlignedData>(() => {
+  if (!ready.value || refTime.value.length === 0) {
+    return [new Float32Array(0)] as unknown as AlignedData;
+  }
+  const xLen = refTime.value.length;
+  const padToRef = (src: Float32Array): Float32Array => {
+    if (src.length === xLen) return src;
+    const out = new Float32Array(xLen);
+    out.fill(NaN);
+    for (let i = 0; i < Math.min(src.length, xLen); i++) out[i] = src[i];
+    return out;
+  };
+  const series: Float32Array[] = [];
+  for (const t of allTraces.value) {
+    for (const a of t.arrs) series.push(padToRef(a));
+  }
+  return [refTime.value, ...series] as unknown as AlignedData;
 });
 
 const opts = computed<Options>(() => {
-  const series: Series[] = [
-    {},
-    ...activeChannels.value.map((c) => ({
-      label:  c.fieldName,
-      stroke: c.color,
-      width:  1.1,
-    })),
-  ];
-
+  const series: Series[] = [{}];
+  for (const t of allTraces.value) {
+    const fam = t.entry.family;
+    for (const c of t.chans) {
+      const tinted = tintTowardFamily(c.color, fam);
+      series.push({
+        label: `${t.entry.log.name} ${c.fieldName}`,
+        stroke: tinted,
+        width: 1.1,
+      });
+    }
+  }
   return {
     width: 800,
     height: 320,
@@ -331,44 +418,60 @@ const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
 const { pinnedPx } = useChartPinnedCursor({ plot, host: hostRef });
 
-// --- per-channel toggle ---
-//
-// Hidden state lives in the view store so it survives a tab switch
-// (see view.hiddenSeries). On plot-ready and on hiddenSeries change,
-// imperatively sync uPlot via setSeries — avoids a full opts rebuild
-// + the flicker that'd come with one.
+// Per-(log × channel) visibility sync. Series order matches
+// allTraces.value iteration: log 0 ch 0..M, log 1 ch 0..N, etc.
 const { hiddenSeries } = storeToRefs(view);
 
 function syncSeriesVisibility() {
   const u = plot.instance();
   if (!u) return;
-  activeChannels.value.forEach((c, i) => {
-    // uPlot series[0] is the x-axis; channel series start at index 1.
-    u.setSeries(i + 1, { show: !hiddenSeries.value.has(c.fieldName) });
-  });
+  let seriesIdx = 1;
+  for (const t of allTraces.value) {
+    const logId = t.entry.log.id;
+    for (const c of t.chans) {
+      const show = !view.isSeriesHidden(logId, c.fieldName);
+      if (u.series[seriesIdx] && u.series[seriesIdx].show !== show) {
+        u.setSeries(seriesIdx, { show });
+      }
+      seriesIdx += 1;
+    }
+  }
 }
 
-watch(plot.ready, (isReady) => { if (isReady) syncSeriesVisibility(); }, { immediate: true });
-watch(hiddenSeries, syncSeriesVisibility);
-watch(activeChannels, syncSeriesVisibility, { deep: false });
+// watchEffect auto-tracks every reactive read inside
+// syncSeriesVisibility (allTraces, hiddenSeries via isSeriesHidden,
+// activeId via the loop, plot.updateCount via the explicit touch).
+// Covers chip toggles, eye toggles, log add/remove, and uPlot rebuilds
+// (which reset every series.show to default-true).
+watchEffect(() => {
+  if (!plot.ready.value) return;
+  void (plot as { updateCount?: { value: number } }).updateCount?.value;
+  syncSeriesVisibility();
+});
 
+/** Footer chip click — toggles only the active log's series for this
+ *  channel. The multi-log mass-toggle path (every loaded log at once)
+ *  would need a per-log chip row which gets crowded at N≥3; for now
+ *  the chip controls the active log only. */
 function toggleChannel(fieldName: string) {
-  view.toggleSeries(fieldName);
+  const activeId = activeLog.activeId.value;
+  if (!activeId) return;
+  view.toggleSeries(activeId, fieldName);
 }
 
-// --- live cursor sample contributions ---
-//
-// Visible (non-hidden) channels only — matches what's actually on the
-// chart. Labels use the field name (e.g. "servo[1]") because the role
-// classifier isn't here yet; once M2 ships, replace with the
-// classified role ("Elevon-L") for confident labels.
+function isChannelHiddenActive(fieldName: string): boolean {
+  const activeId = activeLog.activeId.value;
+  if (!activeId) return false;
+  return view.isSeriesHidden(activeId, fieldName);
+}
+
 const { cursorTime } = storeToRefs(view);
 const liveSamples = computed<CursorSample[]>(() => {
   if (!ready.value || cursorTime.value === null) return [];
   const idx = nearestTimeIndex(time.value, cursorTime.value);
   if (idx === null) return [];
   return activeChannels.value
-    .filter((c) => !hiddenSeries.value.has(c.fieldName))
+    .filter((c) => !isChannelHiddenActive(c.fieldName))
     .map((c) => {
       const cls = classifications.value.get(c.fieldName);
       const roleLabel = cls && cls.role !== 'unknown' ? ROLE_LABELS[cls.role] : c.fieldName;
@@ -387,6 +490,12 @@ useCursorSamples({ sourceKey: 'servos', samples: liveSamples });
 function resetZoom() {
   plot.resetZoom();
 }
+
+const multiLogNote = computed(() => {
+  const n = visibleEntries.value.length;
+  if (n <= 1) return '';
+  return `${n} logs overlaid · chips + saturation strips show active log only`;
+});
 </script>
 
 <template>
@@ -399,7 +508,10 @@ function resetZoom() {
           Actuator outputs · raw PWM
         </div>
         <div class="font-mono text-[10.5px] text-bp-ink-3 mt-px">
-          servo[i] control surfaces and motor[i] pusher channels · drag inside to zoom
+          {{
+            multiLogNote ||
+            'servo[i] control surfaces and motor[i] pusher channels · drag inside to zoom'
+          }}
         </div>
       </div>
 
@@ -457,17 +569,16 @@ function resetZoom() {
         />
       </div>
 
-      <!-- Saturation strips: one row per active channel, time-axis-aligned
-           with the chart above. Warn-colored bars mark hit-low episodes
-           (servo against minPwm); stamp-colored bars mark hit-high. Strips
-           are intentionally simple flex-row backgrounds — no canvas — so
-           Vue reactivity handles updates cleanly when channels toggle. -->
+      <!-- Saturation strips: active log only. Per-log strips at N≥2
+           would explode vertical space; reading the active log's
+           saturation is the actionable signal anyway (recommendations
+           land on the active log). -->
       <div
         v-if="ready"
         class="mt-2 flex flex-col gap-px font-mono text-[10px] text-bp-ink-3"
       >
         <div
-          v-for="c in activeChannels.filter((c) => !hiddenSeries.has(c.fieldName))"
+          v-for="c in activeChannels.filter((c) => !isChannelHiddenActive(c.fieldName))"
           :key="c.fieldName + '-sat'"
           class="flex items-center gap-2 h-3"
         >
@@ -478,8 +589,8 @@ function resetZoom() {
               :key="i"
               class="absolute top-0 bottom-0"
               :style="{
-                left: `${(ep.startIdx / (channelArrays[0]?.length ?? 1)) * 100}%`,
-                width: `${Math.max(0.2, ((ep.endIdx - ep.startIdx + 1) / (channelArrays[0]?.length ?? 1)) * 100)}%`,
+                left: `${(ep.startIdx / (activeChannelArrays[0]?.length ?? 1)) * 100}%`,
+                width: `${Math.max(0.2, ((ep.endIdx - ep.startIdx + 1) / (activeChannelArrays[0]?.length ?? 1)) * 100)}%`,
                 background: ep.kind === 'low' ? 'var(--color-bp-warn)' : 'var(--color-bp-stamp)',
                 opacity: 0.85,
               }"
@@ -513,18 +624,18 @@ function resetZoom() {
         :key="c.fieldName"
         type="button"
         class="flex items-center gap-1.5 font-sans bg-transparent border-0 p-0 cursor-pointer transition-opacity"
-        :class="hiddenSeries.has(c.fieldName)
+        :class="isChannelHiddenActive(c.fieldName)
           ? 'opacity-40 text-bp-dim line-through'
           : 'opacity-100 text-bp-ink-2 hover:text-bp-ink'"
-        :title="hiddenSeries.has(c.fieldName)
+        :title="isChannelHiddenActive(c.fieldName)
           ? 'Click to show'
           : confidenceTitle(c) || 'Click to hide'"
-        :aria-pressed="!hiddenSeries.has(c.fieldName)"
+        :aria-pressed="!isChannelHiddenActive(c.fieldName)"
         @click="toggleChannel(c.fieldName)"
       >
         <span
           class="inline-block w-3.5 h-0.5"
-          :style="{ background: hiddenSeries.has(c.fieldName) ? 'var(--color-bp-dim)' : c.color }"
+          :style="{ background: isChannelHiddenActive(c.fieldName) ? 'var(--color-bp-dim)' : c.color }"
         />
         <span class="font-mono">{{ c.fieldName }}</span>
         <span class="font-sans">· {{ labelFor(c).split('·').pop()?.trim() ?? '' }}</span>

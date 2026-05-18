@@ -12,13 +12,12 @@
 // WingTune-recognised subset.
 
 import { computed, ref } from 'vue';
-import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import DataDivider from '@/components/DataDivider.vue';
 
-const logStore = useLogStore();
-const { scanReport } = storeToRefs(logStore);
+const logStore = useActiveLog();
+const { scanReport } = logStore;
 
 const search = ref('');
 const copiedKey = ref<string | null>(null);

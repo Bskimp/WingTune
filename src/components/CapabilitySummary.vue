@@ -7,9 +7,8 @@
 // user-trust trap).
 
 import { computed } from 'vue';
-import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import FlightStrip from '@/components/FlightStrip.vue';
 import FieldTable from '@/components/FieldTable.vue';
 import HeaderParamsPanel from '@/components/HeaderParamsPanel.vue';
@@ -17,8 +16,8 @@ import DataDivider from '@/components/DataDivider.vue';
 import ConfidenceStamp from '@/components/ConfidenceStamp.vue';
 import ReadinessCard from '@/components/ReadinessCard.vue';
 
-const logStore = useLogStore();
-const { scanReport, firmwareRevision, boardInfo, events } = storeToRefs(logStore);
+const logStore = useActiveLog();
+const { scanReport, firmwareRevision, boardInfo, events } = logStore;
 
 // Cards rendered from real ScanReport data only.
 const capCards = computed(() => {

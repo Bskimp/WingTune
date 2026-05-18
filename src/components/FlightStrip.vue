@@ -1,16 +1,20 @@
 <script setup lang="ts">
 // Aviation-form top strip after a log is loaded — REG / HRS / FIRMWARE /
-// SIZE / DATE data block. Real values from the log store; nothing mocked.
-// The "Swap" button resets the store so the user lands back on the drop
-// frame.
+// SIZE / DATE data block. Real values from the active-log composable;
+// nothing mocked. The "Swap" button resets the session so the user
+// lands back on the drop frame.
+//
+// Push-3 note: in multi-log mode this strip moves into each per-log
+// roster entry (each loaded log gets its own strip + Remove button).
+// For now (single-log entry surface) Swap = full session reset.
 
 import { computed } from 'vue';
-import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useSessionStore } from '@/stores/session';
+import { useActiveLog } from '@/composables/useActiveLog';
 import IconX from '@/components/icons/IconX.vue';
 
-const logStore = useLogStore();
+const session = useSessionStore();
 const {
   fileName,
   fileSize,
@@ -21,7 +25,7 @@ const {
   craftName,
   time,
   scanReport,
-} = storeToRefs(logStore);
+} = useActiveLog();
 
 function formatHms(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '–:––:––';
@@ -76,7 +80,7 @@ const sizeSub = computed(() => {
 });
 
 function swap() {
-  logStore.reset();
+  session.reset();
 }
 </script>
 

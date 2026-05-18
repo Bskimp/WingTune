@@ -20,7 +20,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import type { AlignedData, Options } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
@@ -56,9 +56,9 @@ const COLORS = {
 
 const selectedAxis = ref<0 | 1 | 2>(0);
 
-const logStore = useLogStore();
+const logStore = useActiveLog();
 const view = useViewStore();
-const { time, fields, hydrating } = storeToRefs(logStore);
+const { time, fields, hydrating } = logStore;
 
 const axisSpec = computed(() => AXES[selectedAxis.value]);
 

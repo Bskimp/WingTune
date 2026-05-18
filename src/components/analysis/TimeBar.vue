@@ -16,7 +16,7 @@
 import { computed, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useViewStore } from '@/stores/view';
 
 /** Must match `axes[1].size` on every uPlot chart panel
@@ -26,9 +26,8 @@ import { useViewStore } from '@/stores/view';
 const PLOT_AXIS_LEFT_PX = 50;
 const PLOT_PADDING_RIGHT_PX = 10;
 
-const logStore = useLogStore();
 const view = useViewStore();
-const { time } = storeToRefs(logStore);
+const { time } = useActiveLog();
 const { cursorTime, cursorPinned } = storeToRefs(view);
 
 const contentRef = ref<HTMLDivElement | null>(null);

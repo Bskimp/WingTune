@@ -9,6 +9,23 @@
 // resonance peaks on noisy real-world data. PSD plotted in dB
 // (10·log10) on linear y, linear x in Hz.
 //
+// M1.7 Push 3b — multi-log: every loaded log gets its own PSD per
+// axis. Series stroke color is the per-axis hue tinted toward the
+// log's family (warm/cool/neutral) so each (log × axis) is visually
+// distinct. Filter overlays + sample-rate readout come from the
+// first visible log (multi-log filter compare is future polish).
+// Per-axis chips toggle the axis across EVERY loaded log via
+// `view.toggleSeriesForAllLogs` — clicking R hides roll on every
+// log at once, matching the single-log mental model. Logs hidden
+// via the roster eye toggle are skipped entirely.
+//
+// Frequency-axis reconciliation: each log may have a different
+// freq axis length (different sample rates or different durations).
+// We pick the longest as the reference; shorter logs get their PSD
+// padded with NaN past their Nyquist so uPlot doesn't draw a tail.
+// Same-plane comparison flights typically share sample rates so
+// padding is rare in practice.
+//
 // Why no cursor integration: this panel is frequency-domain, not
 // time-domain. The shared cursor (which tracks time-since-log-start)
 // doesn't have a meaningful mapping here. Hovering reads the bin's
@@ -18,16 +35,21 @@
 // PSD across the airspeed range — diagnoses speed-dependent
 // resonance behaviour). Needs validated M3 airspeed first.
 
-import { computed, onMounted, ref, watch } from 'vue';
-import { storeToRefs } from 'pinia';
-import type { AlignedData, Options } from 'uplot';
+import { computed, ref, watch, watchEffect } from 'vue';
+import type { AlignedData, Options, Series } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useSessionStore, type LogState } from '@/stores/session';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { welchPsd, psdToDb, estimateSampleRate } from '@/lib/spectrum';
 import { computeDelayBudget, type FilterDelayBudget } from '@/lib/filterDelay';
 import { resolveSignal, type Axis } from '@/lib/signalRegistry';
+import {
+  familyForIndex,
+  tintTowardFamily,
+  type FamilySpec,
+} from '@/lib/logColors';
 import type { FilterConfig, LowPassConfig } from '@/lib/wasmBridge';
 
 const COLORS = {
@@ -46,6 +68,8 @@ interface AxisSpec {
   label: string;
   short: 'R' | 'P' | 'Y';
   field: string;
+  /** Base axis hue. The actual stroke color is this tinted toward
+   *  the log's family — see `tintTowardFamily`. */
   color: string;
 }
 
@@ -65,12 +89,15 @@ const MODE_CHIPS: Array<{ key: DisplayMode; label: string; title: string }> = [
 
 const displayMode = ref<DisplayMode>('filt');
 
-const logStore = useLogStore();
+const session = useSessionStore();
 const view = useViewStore();
-const { time, fields, hydrating, scanReport } = storeToRefs(logStore);
+const activeLog = useActiveLog();
 
+// Filter overlay sourced from active (first) log. Multi-log filter
+// compare is future polish — would need per-log overlay layers and
+// per-log filter chip rows, neither in the Push 3b scope.
 const filterConfig = computed<FilterConfig | null>(
-  () => scanReport.value?.filter_config ?? null,
+  () => activeLog.scanReport.value?.filter_config ?? null,
 );
 const delayBudget = computed<FilterDelayBudget | null>(() => {
   const fc = filterConfig.value;
@@ -78,13 +105,34 @@ const delayBudget = computed<FilterDelayBudget | null>(() => {
   return computeDelayBudget(fc);
 });
 
-// Resolve gyro_raw per axis through the signal registry. Returns
-// the hydratable main-frame field name — `gyroUnfilt[N]` when the
-// Blackbox "Gyro (Unfiltered)" toggle was on, else `debug[N]` when
-// `debug_mode = GYRO_RAW` is the source. The registry hides which
-// path resolved; the panel just hydrates whatever it gets back.
-const rawGyroFieldNames = computed<(string | null)[]>(() => {
-  const sr = scanReport.value;
+interface LogEntry {
+  log: LogState;
+  family: FamilySpec;
+  hidden: boolean;
+}
+
+const logEntries = computed<LogEntry[]>(() => {
+  const out: LogEntry[] = [];
+  let idx = 0;
+  for (const log of session.logs.values()) {
+    out.push({
+      log,
+      family: familyForIndex(idx),
+      hidden: view.isLogHidden(log.id),
+    });
+    idx += 1;
+  }
+  return out;
+});
+
+const visibleEntries = computed(() =>
+  logEntries.value.filter((e) => !e.hidden),
+);
+
+/** Resolve raw-gyro field names per axis for a given log. Each log
+ *  may have a different debug_mode → different raw-gyro source. */
+function rawGyroNamesFor(log: LogState): (string | null)[] {
+  const sr = log.scanReport;
   if (!sr) return [null, null, null];
   return ([0, 1, 2] as Axis[]).map((axis) => {
     const r = resolveSignal('gyro_raw', axis, sr.capability);
@@ -93,11 +141,21 @@ const rawGyroFieldNames = computed<(string | null)[]>(() => {
       ? r.source.field
       : `debug[${r.source.channel}]`;
   });
-});
+}
 
-const rawGyroAvailable = computed(
-  () => rawGyroFieldNames.value.some((n) => n !== null),
-);
+// Eager-hydrate gyro + raw-gyro per log. Re-runs when logs are
+// added (visibleEntries changes). `ensureFields` is idempotent so
+// re-running on a log whose fields already hydrated is cheap.
+watchEffect(() => {
+  for (const { log } of logEntries.value) {
+    const toHydrate: string[] = [...AXES.map((a) => a.field)];
+    for (const n of rawGyroNamesFor(log)) if (n) toHydrate.push(n);
+    session.ensureFields(log.id, toHydrate).catch(() => {
+      // Hydration failures are surfaced by the session store; the
+      // chart just renders without that log's data.
+    });
+  }
+});
 
 type OverlayKey = 'notch' | 'gyro' | 'dterm' | 'rpm';
 
@@ -108,10 +166,6 @@ interface OverlayChip {
   present: boolean;
 }
 
-// Per-filter overlay visibility. Local to this panel (no cross-session
-// persistence needed — re-shows on remount). Default-on so the user
-// sees the filter chain immediately; can be selectively dimmed when
-// debugging specific peaks.
 const overlayShow = ref<Record<OverlayKey, boolean>>({
   notch: true,
   gyro:  true,
@@ -120,10 +174,10 @@ const overlayShow = ref<Record<OverlayKey, boolean>>({
 });
 
 const OVERLAY_COLORS: Record<OverlayKey, string> = {
-  notch: '#ffc46a', // warn — dyn notch band
-  gyro:  '#b6c7e0', // ink2 — gyro LPFs
-  dterm: '#7a90b0', // ink3 — dterm LPFs
-  rpm:   '#7ee0a8', // green — rpm filter
+  notch: '#ffc46a',
+  gyro:  '#b6c7e0',
+  dterm: '#7a90b0',
+  rpm:   '#7ee0a8',
 };
 
 const overlayChips = computed<OverlayChip[]>(() => {
@@ -138,28 +192,32 @@ const overlayChips = computed<OverlayChip[]>(() => {
   return all.filter((c) => c.present);
 });
 
-onMounted(() => {
-  const fieldsToHydrate: string[] = [...AXES.map((a) => a.field)];
-  for (const n of rawGyroFieldNames.value) if (n) fieldsToHydrate.push(n);
-  logStore.ensureFields(fieldsToHydrate);
-});
-
-// Re-hydrate raw fields if the log changes (rawGyroFieldNames may
-// shift from null to populated when scanReport lands).
-watch(rawGyroFieldNames, (names) => {
-  const present = names.filter((n): n is string => n !== null);
-  if (present.length > 0) logStore.ensureFields(present);
-});
-
-const isHydrating = computed(() => {
-  for (const a of AXES) if (hydrating.value.has(a.field)) return true;
-  for (const n of rawGyroFieldNames.value) {
-    if (n && hydrating.value.has(n)) return true;
+const rawGyroAvailable = computed(() => {
+  for (const { log } of visibleEntries.value) {
+    if (rawGyroNamesFor(log).some((n) => n !== null)) return true;
   }
   return false;
 });
 
-const sampleRateHz = computed(() => estimateSampleRate(time.value));
+/** Sample rate of the first visible log. Drives the initial 0-300 Hz
+ *  zoom and is used for the header readout. Multi-log compare flights
+ *  typically share sample rates; mixed-rate logs would just show the
+ *  first log's rate (with each log's own PSD still computed against
+ *  its own rate). */
+const sampleRateHz = computed(() => {
+  const e = visibleEntries.value[0];
+  return e ? estimateSampleRate(e.log.time) : 0;
+});
+
+const isHydrating = computed(() => {
+  for (const { log } of visibleEntries.value) {
+    for (const a of AXES) if (log.hydrating.has(a.field)) return true;
+    for (const n of rawGyroNamesFor(log)) {
+      if (n && log.hydrating.has(n)) return true;
+    }
+  }
+  return false;
+});
 
 interface AxisPsd {
   spec: AxisSpec;
@@ -169,23 +227,22 @@ interface AxisPsd {
   numSegments: number;
 }
 
-const psdResults = computed<AxisPsd[]>(() => {
-  const sr = sampleRateHz.value;
+/** Per-log, per-axis PSD computation. Returns one AxisPsd per axis
+ *  that has enough samples to produce at least one Welch segment. */
+function psdResultsFor(log: LogState): AxisPsd[] {
+  const sr = estimateSampleRate(log.time);
   if (sr <= 0) return [];
+  const rawNames = rawGyroNamesFor(log);
   const out: AxisPsd[] = [];
   for (const a of AXES) {
-    const filteredArr = fields.value.get(a.field);
-    const rawName = rawGyroFieldNames.value[a.id];
-    const rawArr = rawName ? fields.value.get(rawName) : undefined;
-
-    // Need at least one source to bother computing a frequency axis.
+    const filteredArr = log.fields.get(a.field);
+    const rawName = rawNames[a.id];
+    const rawArr = rawName ? log.fields.get(rawName) : undefined;
     const fHas = filteredArr && filteredArr.length >= SEGMENT_LEN;
     const rHas = rawArr && rawArr.length >= SEGMENT_LEN;
     if (!fHas && !rHas) continue;
-
     const filteredRes = fHas ? welchPsd(filteredArr!, sr, SEGMENT_LEN, 0.5) : null;
     const rawRes      = rHas ? welchPsd(rawArr!, sr, SEGMENT_LEN, 0.5)      : null;
-
     out.push({
       spec: a,
       frequencies: (filteredRes ?? rawRes!).frequencies,
@@ -195,198 +252,232 @@ const psdResults = computed<AxisPsd[]>(() => {
     });
   }
   return out;
+}
+
+interface LogPsd {
+  entry: LogEntry;
+  results: AxisPsd[];
+}
+
+const allPsd = computed<LogPsd[]>(() =>
+  visibleEntries.value.map((entry) => ({
+    entry,
+    results: psdResultsFor(entry.log),
+  })),
+);
+
+const ready = computed(() =>
+  allPsd.value.some((lp) => lp.results.some((r) => r.numSegments > 0)),
+);
+
+/** Longest frequency axis across visible logs — used as the shared x.
+ *  Shorter logs' PSDs get NaN-padded past their Nyquist. */
+const refFrequencies = computed<Float32Array>(() => {
+  let best: Float32Array | null = null;
+  for (const lp of allPsd.value) {
+    for (const r of lp.results) {
+      if (!best || r.frequencies.length > best.length) best = r.frequencies;
+    }
+  }
+  return best ?? new Float32Array(0);
 });
 
-const ready = computed(() => {
-  if (psdResults.value.length === 0) return false;
-  // At least one axis must have had enough samples to produce segments.
-  return psdResults.value.some((r) => r.numSegments > 0);
-});
+// Per-log block of series: 3 filtered + 3 raw, in axis order.
+// Total series count = 1 (x) + 6 × visibleEntries.length.
+const PER_LOG_SERIES = AXES.length * 2;
 
 const data = computed<AlignedData>(() => {
-  if (!ready.value) {
+  if (!ready.value || refFrequencies.value.length === 0) {
     return [new Float32Array(0)] as unknown as AlignedData;
   }
-  // Series order: x, filtered R, filtered P, filtered Y, raw R, raw P, raw Y.
-  // All axes share the same frequency axis (same sample rate + segment
-  // length). Show/hide toggling is via uPlot's setSeries imperatively
-  // below — keeps data clean (no NaN poisoning of y-auto-range) and
-  // doesn't trigger chart rebuild on toggles.
-  const base = psdResults.value[0];
-  const blank = () => {
-    const b = new Float32Array(base.frequencies.length);
+  const xLen = refFrequencies.value.length;
+  const blank = (): Float32Array => {
+    const b = new Float32Array(xLen);
     b.fill(NaN);
     return b;
   };
-  const filtered: Float32Array[] = AXES.map((a) => {
-    const found = psdResults.value.find((r) => r.spec.id === a.id);
-    return found?.filteredDb ?? blank();
-  });
-  const raw: Float32Array[] = AXES.map((a) => {
-    const found = psdResults.value.find((r) => r.spec.id === a.id);
-    return found?.rawDb ?? blank();
-  });
-  return [base.frequencies, ...filtered, ...raw] as unknown as AlignedData;
+  const padToRef = (src: Float32Array | null): Float32Array => {
+    if (!src) return blank();
+    if (src.length === xLen) return src;
+    // Source is shorter (lower-Nyquist log) — copy what we have and
+    // leave the tail as NaN so uPlot doesn't draw a wrap.
+    const out = blank();
+    for (let i = 0; i < Math.min(src.length, xLen); i++) out[i] = src[i];
+    return out;
+  };
+
+  const series: Float32Array[] = [];
+  for (const lp of allPsd.value) {
+    // filtered block (axis order)
+    for (const ax of AXES) {
+      const res = lp.results.find((r) => r.spec.id === ax.id);
+      series.push(padToRef(res?.filteredDb ?? null));
+    }
+    // raw block (axis order)
+    for (const ax of AXES) {
+      const res = lp.results.find((r) => r.spec.id === ax.id);
+      series.push(padToRef(res?.rawDb ?? null));
+    }
+  }
+  return [refFrequencies.value, ...series] as unknown as AlignedData;
 });
 
-const opts = computed<Options>(() => ({
-  width: 800,
-  height: 300,
-  legend: { show: false },
-  scales: {
-    // auto:false on x so setData doesn't re-stretch the scale to the
-    // full Nyquist data extent on every refresh — leaves our imperative
-    // setScale (and the user's drag-zoom, which also uses setScale)
-    // as the only things that move the x bounds. y stays auto so
-    // toggling an axis can rescale to the visible peaks.
-    x: { time: false, auto: false },
-    y: { auto: true },
-  },
-  cursor: {
-    drag: { x: true, y: false, uni: 50 },
-    focus: { prox: 30 },
-    points: { show: true, size: 4 },
-  },
-  series: [
-    {},
-    // Filtered (solid).
-    { label: 'roll',     stroke: COLORS.accent, width: 1.25 },
-    { label: 'pitch',    stroke: COLORS.warn,   width: 1.25 },
-    { label: 'yaw',      stroke: COLORS.stamp,  width: 1.25 },
-    // Raw (dashed, slightly thinner). Same axis-hue so raw/filtered
-    // pairs read together at a glance.
-    { label: 'roll raw',  stroke: COLORS.accent, width: 1, dash: [4, 3] },
-    { label: 'pitch raw', stroke: COLORS.warn,   width: 1, dash: [4, 3] },
-    { label: 'yaw raw',   stroke: COLORS.stamp,  width: 1, dash: [4, 3] },
-  ],
-  axes: [
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      values: (_u, splits) => splits.map((v) => `${v.toFixed(0)} Hz`),
+const opts = computed<Options>(() => {
+  const series: Series[] = [{}];
+  for (const lp of allPsd.value) {
+    const fam = lp.entry.family;
+    // filtered traces (solid)
+    for (const ax of AXES) {
+      const tinted = tintTowardFamily(ax.color, fam);
+      series.push({
+        label: `${lp.entry.log.name} ${ax.short}`,
+        stroke: tinted,
+        width: 1.25,
+      });
+    }
+    // raw traces (dashed)
+    for (const ax of AXES) {
+      const tinted = tintTowardFamily(ax.color, fam);
+      series.push({
+        label: `${lp.entry.log.name} ${ax.short} raw`,
+        stroke: tinted,
+        width: 1,
+        dash: [4, 3],
+      });
+    }
+  }
+  return {
+    width: 800,
+    height: 300,
+    legend: { show: false },
+    scales: {
+      x: { time: false, auto: false },
+      y: { auto: true },
     },
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      size:   50,
-      values: (_u, splits) => splits.map((v) => `${v.toFixed(0)} dB`),
+    cursor: {
+      drag: { x: true, y: false, uni: 50 },
+      focus: { prox: 30 },
+      points: { show: true, size: 4 },
     },
-  ],
-  hooks: {
-    // Filter overlay renderer. Reads filterConfig + overlayShow at
-    // draw time so toggling chips or loading a new log just needs a
-    // plot.redraw() (no full uPlot rebuild). The explicit watch below
-    // does that.
-    draw: [
-      (u) => {
-        const fc = filterConfig.value;
-        if (!fc) return;
-        const show = overlayShow.value;
-        const ctx = u.ctx;
-        const top = u.bbox.top;
-        const height = u.bbox.height;
+    series,
+    axes: [
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        values: (_u, splits) => splits.map((v) => `${v.toFixed(0)} Hz`),
+      },
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        size:   50,
+        values: (_u, splits) => splits.map((v) => `${v.toFixed(0)} dB`),
+      },
+    ],
+    hooks: {
+      // Filter overlay renderer — sources from the active log's
+      // filter config. Reads overlayShow at draw time so chip
+      // toggling just needs plot.redraw().
+      draw: [
+        (u) => {
+          const fc = filterConfig.value;
+          if (!fc) return;
+          const show = overlayShow.value;
+          const ctx = u.ctx;
+          const top = u.bbox.top;
+          const height = u.bbox.height;
 
-        ctx.save();
+          ctx.save();
 
-        // Dynamic notch coverage band — the range BF scans for peaks.
-        if (show.notch && fc.dyn_notch && fc.dyn_notch.min_hz > 0 && fc.dyn_notch.max_hz > fc.dyn_notch.min_hz) {
-          const x1 = u.valToPos(fc.dyn_notch.min_hz, 'x', true);
-          const x2 = u.valToPos(fc.dyn_notch.max_hz, 'x', true);
-          ctx.fillStyle = 'rgba(255, 196, 106, 0.10)';
-          ctx.fillRect(x1, top, x2 - x1, height);
-          ctx.strokeStyle = 'rgba(255, 196, 106, 0.55)';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(x1, top); ctx.lineTo(x1, top + height);
-          ctx.moveTo(x2, top); ctx.lineTo(x2, top + height);
-          ctx.stroke();
-        }
-
-        const drawLpf = (lpf: LowPassConfig | null, color: string) => {
-          if (!lpf) return;
-          const dynMin = lpf.dyn_min_hz;
-          const dynMax = lpf.dyn_max_hz;
-          if (dynMin != null && dynMax != null && dynMax > dynMin) {
-            const x1 = u.valToPos(dynMin, 'x', true);
-            const x2 = u.valToPos(dynMax, 'x', true);
-            ctx.fillStyle = color + '1c';
+          if (show.notch && fc.dyn_notch && fc.dyn_notch.min_hz > 0 && fc.dyn_notch.max_hz > fc.dyn_notch.min_hz) {
+            const x1 = u.valToPos(fc.dyn_notch.min_hz, 'x', true);
+            const x2 = u.valToPos(fc.dyn_notch.max_hz, 'x', true);
+            ctx.fillStyle = 'rgba(255, 196, 106, 0.10)';
             ctx.fillRect(x1, top, x2 - x1, height);
-            ctx.strokeStyle = color + 'aa';
+            ctx.strokeStyle = 'rgba(255, 196, 106, 0.55)';
             ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(x1, top); ctx.lineTo(x1, top + height);
             ctx.moveTo(x2, top); ctx.lineTo(x2, top + height);
             ctx.stroke();
-          } else {
-            const fcHz = lpf.static_hz ?? 0;
-            if (fcHz <= 0) return;
-            const x = u.valToPos(fcHz, 'x', true);
-            ctx.strokeStyle = color + 'cc';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([4, 3]);
-            ctx.beginPath();
-            ctx.moveTo(x, top); ctx.lineTo(x, top + height);
-            ctx.stroke();
-            ctx.setLineDash([]);
           }
-        };
-        if (show.gyro) {
-          drawLpf(fc.gyro_lpf1,  OVERLAY_COLORS.gyro);
-          drawLpf(fc.gyro_lpf2,  OVERLAY_COLORS.gyro);
-        }
-        if (show.dterm) {
-          drawLpf(fc.dterm_lpf1, OVERLAY_COLORS.dterm);
-          drawLpf(fc.dterm_lpf2, OVERLAY_COLORS.dterm);
-        }
 
-        // RPM filter — swept notches follow motor RPM so we can't show
-        // their actual position. Surface the two static markers: the
-        // RPM-feed LP cutoff (dashed) and the notch-suppression floor
-        // (solid + label-side band hint).
-        if (show.rpm && fc.rpm_filter) {
-          const rpm = fc.rpm_filter;
-          const color = OVERLAY_COLORS.rpm;
-          if (rpm.min_hz > 0) {
-            // Solid line at min_hz: notches are suppressed below this.
-            const x = u.valToPos(rpm.min_hz, 'x', true);
-            ctx.strokeStyle = color + 'cc';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.moveTo(x, top); ctx.lineTo(x, top + height);
-            ctx.stroke();
+          const drawLpf = (lpf: LowPassConfig | null, color: string) => {
+            if (!lpf) return;
+            const dynMin = lpf.dyn_min_hz;
+            const dynMax = lpf.dyn_max_hz;
+            if (dynMin != null && dynMax != null && dynMax > dynMin) {
+              const x1 = u.valToPos(dynMin, 'x', true);
+              const x2 = u.valToPos(dynMax, 'x', true);
+              ctx.fillStyle = color + '1c';
+              ctx.fillRect(x1, top, x2 - x1, height);
+              ctx.strokeStyle = color + 'aa';
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(x1, top); ctx.lineTo(x1, top + height);
+              ctx.moveTo(x2, top); ctx.lineTo(x2, top + height);
+              ctx.stroke();
+            } else {
+              const fcHz = lpf.static_hz ?? 0;
+              if (fcHz <= 0) return;
+              const x = u.valToPos(fcHz, 'x', true);
+              ctx.strokeStyle = color + 'cc';
+              ctx.lineWidth = 1;
+              ctx.setLineDash([4, 3]);
+              ctx.beginPath();
+              ctx.moveTo(x, top); ctx.lineTo(x, top + height);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
+          };
+          if (show.gyro) {
+            drawLpf(fc.gyro_lpf1, OVERLAY_COLORS.gyro);
+            drawLpf(fc.gyro_lpf2, OVERLAY_COLORS.gyro);
           }
-          if (rpm.lpf_hz > 0) {
-            // Dashed line at lpf_hz: the RPM-signal smoothing cutoff.
-            const x = u.valToPos(rpm.lpf_hz, 'x', true);
-            ctx.strokeStyle = color + 'aa';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([2, 3]);
-            ctx.beginPath();
-            ctx.moveTo(x, top); ctx.lineTo(x, top + height);
-            ctx.stroke();
-            ctx.setLineDash([]);
+          if (show.dterm) {
+            drawLpf(fc.dterm_lpf1, OVERLAY_COLORS.dterm);
+            drawLpf(fc.dterm_lpf2, OVERLAY_COLORS.dterm);
           }
-        }
 
-        ctx.restore();
-      },
-    ],
-  },
-}));
+          if (show.rpm && fc.rpm_filter) {
+            const rpm = fc.rpm_filter;
+            const color = OVERLAY_COLORS.rpm;
+            if (rpm.min_hz > 0) {
+              const x = u.valToPos(rpm.min_hz, 'x', true);
+              ctx.strokeStyle = color + 'cc';
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(x, top); ctx.lineTo(x, top + height);
+              ctx.stroke();
+            }
+            if (rpm.lpf_hz > 0) {
+              const x = u.valToPos(rpm.lpf_hz, 'x', true);
+              ctx.strokeStyle = color + 'aa';
+              ctx.lineWidth = 1;
+              ctx.setLineDash([2, 3]);
+              ctx.beginPath();
+              ctx.moveTo(x, top); ctx.lineTo(x, top + height);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
+          }
+
+          ctx.restore();
+        },
+      ],
+    },
+  };
+});
 
 const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
 
 // Apply the initial 0-300 Hz view (or up to Nyquist) once per loaded
-// log. Triggers when sampleRateHz changes (new log load); leaves user
-// zoom alone otherwise. updateCount in the dep list ensures we fire
-// AFTER setData has populated the chart — calling setScale on a
-// pre-data plot is harmless but the post-data call is the one that
-// sticks.
+// log set. Triggers when sampleRateHz changes (new log loaded);
+// leaves user zoom alone otherwise.
 let lastAppliedSampleRate = 0;
 watch(
   [plot.updateCount, sampleRateHz],
@@ -401,19 +492,16 @@ watch(
   },
 );
 
-// Sync per-axis show/hide AND display-mode (filt/raw/both) via uPlot's
-// setSeries — keeps data clean and doesn't trigger a chart rebuild
-// (vs flipping series.show via opts). Re-applies on plot.updateCount
-// in case a rebuild reset the series state to its default.
-//
-// Visibility per series = axisShown (R/P/Y chip) AND mode-allows-family
-//   filt → only filtered (series 1..3) visible
-//   raw  → only raw (series 4..6) visible
-//   both → both visible
+// Sync per-(log × axis × mode) show/hide via uPlot's setSeries.
+// Each log block contributes PER_LOG_SERIES = 6 traces (3 filt + 3 raw)
+// in stable order: filt R/P/Y then raw R/P/Y.
 watch(
   [
     plot.updateCount,
-    () => AXES.map((a) => view.isSeriesHidden(a.field)),
+    () => visibleEntries.value.map((e) => e.log.id).join(','),
+    () => visibleEntries.value.flatMap((e) =>
+      AXES.map((a) => view.isSeriesHidden(e.log.id, a.field)),
+    ),
     displayMode,
   ],
   () => {
@@ -422,51 +510,66 @@ watch(
     const mode = displayMode.value;
     const filtAllowed = mode === 'filt' || mode === 'both';
     const rawAllowed  = mode === 'raw'  || mode === 'both';
-    AXES.forEach((a, i) => {
-      const axisShown = !view.isSeriesHidden(a.field);
-      const filtIdx = i + 1;       // series 1..3
-      const rawIdx  = i + 1 + 3;   // series 4..6
-      const filtShow = axisShown && filtAllowed;
-      const rawShow  = axisShown && rawAllowed;
-      if (u.series[filtIdx] && u.series[filtIdx].show !== filtShow) {
-        u.setSeries(filtIdx, { show: filtShow });
+    let seriesIdx = 1;
+    for (const lp of allPsd.value) {
+      const logId = lp.entry.log.id;
+      // filtered block (3 series)
+      for (const ax of AXES) {
+        const axisShown = !view.isSeriesHidden(logId, ax.field);
+        const show = axisShown && filtAllowed;
+        if (u.series[seriesIdx] && u.series[seriesIdx].show !== show) {
+          u.setSeries(seriesIdx, { show });
+        }
+        seriesIdx += 1;
       }
-      if (u.series[rawIdx] && u.series[rawIdx].show !== rawShow) {
-        u.setSeries(rawIdx, { show: rawShow });
+      // raw block (3 series)
+      for (const ax of AXES) {
+        const axisShown = !view.isSeriesHidden(logId, ax.field);
+        const show = axisShown && rawAllowed;
+        if (u.series[seriesIdx] && u.series[seriesIdx].show !== show) {
+          u.setSeries(seriesIdx, { show });
+        }
+        seriesIdx += 1;
       }
-    });
+    }
   },
   { immediate: true },
 );
 
-// Filter overlay live-redraw — the draw hook reads filterConfig + the
-// toggle map directly so we only need to ping the chart on changes.
 watch([overlayShow, filterConfig], () => plot.redraw(), { deep: true });
 
 function resetZoom() {
-  // Override the default resetZoom (which resets to data extent) so
-  // the reset goes back to the initial 0-300 Hz view, not the full
-  // 0-Nyquist data range — that's what the user expects from the
-  // chip-corner button.
   const sr = sampleRateHz.value;
   if (sr <= 0) { plot.resetZoom(); return; }
   plot.instance()?.setScale('x', { min: 0, max: Math.min(300, sr / 2) });
 }
 
+/** Per-axis chip click: toggle this axis across EVERY visible log so
+ *  the chip stays a single-axis-wide toggle (not "hide R on log 1
+ *  only" — that's not what the chip suggests). */
 function toggleAxis(field: string) {
-  view.toggleSeries(field);
+  const ids = visibleEntries.value.map((e) => e.log.id);
+  view.toggleSeriesForAllLogs(field, ids);
+}
+
+/** Axis chip "on" state — true if any visible log shows this axis.
+ *  Mirrors the chip's mental model: "any of my logs showing R?" */
+function isAxisVisible(field: string): boolean {
+  for (const e of visibleEntries.value) {
+    if (!view.isSeriesHidden(e.log.id, field)) return true;
+  }
+  return false;
 }
 
 const pendingMessage = computed(() => {
   if (isHydrating.value) return 'hydrating gyroADC fields…';
+  if (visibleEntries.value.length === 0) return 'no logs loaded';
   if (sampleRateHz.value <= 0) return 'time axis empty — load a log first';
-  const missing = AXES.filter((a) => {
-    const arr = fields.value.get(a.field);
-    return !arr || arr.length === 0;
-  });
-  if (missing.length === AXES.length) return 'no gyroADC fields in this log';
-  if (psdResults.value.every((r) => r.numSegments === 0)) {
-    return `log too short for ${SEGMENT_LEN}-sample window — need ≥ ${SEGMENT_LEN} samples per axis`;
+  if (allPsd.value.every((lp) => lp.results.length === 0)) {
+    return 'no gyroADC fields in the loaded log(s)';
+  }
+  if (allPsd.value.every((lp) => lp.results.every((r) => r.numSegments === 0))) {
+    return `log(s) too short for ${SEGMENT_LEN}-sample window — need ≥ ${SEGMENT_LEN} samples per axis`;
   }
   return 'computing spectrum…';
 });
@@ -478,10 +581,16 @@ const rawMissingHint = computed(() => {
 });
 
 const segmentInfo = computed(() => {
-  const r = psdResults.value[0];
-  if (!r || sampleRateHz.value <= 0) return '';
-  const resolutionHz = sampleRateHz.value / SEGMENT_LEN;
-  return `${SEGMENT_LEN}-pt Welch · ${r.numSegments.toLocaleString()} segments · ${resolutionHz.toFixed(2)} Hz/bin`;
+  const first = allPsd.value[0];
+  if (!first || first.results.length === 0) return '';
+  const r = first.results[0];
+  const sr = estimateSampleRate(first.entry.log.time);
+  if (sr <= 0) return '';
+  const resolutionHz = sr / SEGMENT_LEN;
+  const base = `${SEGMENT_LEN}-pt Welch · ${r.numSegments.toLocaleString()} segments · ${resolutionHz.toFixed(2)} Hz/bin`;
+  const n = visibleEntries.value.length;
+  if (n > 1) return `${base} · ${n} logs overlaid`;
+  return base;
 });
 
 const delayBudgetTooltip = computed(() => {
@@ -528,9 +637,6 @@ const delayBudgetTooltip = computed(() => {
           >{{ delayBudget.totalMs.toFixed(1) }} ms</div>
         </div>
 
-        <!-- Per-filter overlay chips. Each chip is independently
-             togglable; chip only appears when the corresponding
-             filter is present in the log's header config. -->
         <div v-if="overlayChips.length > 0" class="flex gap-px">
           <button
             v-for="chip in overlayChips"
@@ -547,7 +653,6 @@ const delayBudgetTooltip = computed(() => {
           >{{ chip.label }}</button>
         </div>
 
-        <!-- filt / raw / both mode selector -->
         <div class="flex gap-px">
           <button
             v-for="chip in MODE_CHIPS"
@@ -563,19 +668,19 @@ const delayBudgetTooltip = computed(() => {
           >{{ chip.label }}</button>
         </div>
 
-        <!-- axis toggle chips (per-axis show/hide via view.hiddenSeries) -->
+        <!-- axis toggle chips — toggle this axis across every loaded log -->
         <div class="flex gap-px">
           <button
             v-for="ax in AXES"
             :key="ax.id"
             type="button"
             class="px-2.5 py-[3px] font-mono text-[11px] font-semibold border cursor-pointer"
-            :class="!view.isSeriesHidden(ax.field)
+            :class="isAxisVisible(ax.field)
               ? 'text-bp-bg border-current'
               : 'bg-bp-surface-2 text-bp-ink-3 border-bp-line-2 hover:text-bp-ink'"
-            :style="!view.isSeriesHidden(ax.field) ? { backgroundColor: ax.color, borderColor: ax.color } : {}"
-            :aria-pressed="!view.isSeriesHidden(ax.field)"
-            :title="`Toggle ${ax.label}`"
+            :style="isAxisVisible(ax.field) ? { backgroundColor: ax.color, borderColor: ax.color } : {}"
+            :aria-pressed="isAxisVisible(ax.field)"
+            :title="`Toggle ${ax.label} (across all loaded logs)`"
             @click="toggleAxis(ax.field)"
           >
             {{ ax.short }}
@@ -608,24 +713,27 @@ const delayBudgetTooltip = computed(() => {
     </div>
 
     <footer
-      class="flex justify-between items-center px-3 py-2 border-t border-bp-line text-[10.5px]"
+      class="flex flex-wrap justify-between items-center px-3 py-2 border-t border-bp-line text-[10.5px] gap-y-1"
     >
-      <div class="flex gap-4 items-center font-sans text-bp-ink-2">
+      <div class="flex flex-wrap gap-x-4 gap-y-1 items-center font-sans text-bp-ink-2">
+        <!-- per-log legend: family-tinted dot + filename -->
         <span
-          v-for="ax in AXES"
-          :key="ax.id"
+          v-for="lp in allPsd"
+          :key="lp.entry.log.id"
           class="flex items-center gap-1.5"
-          :class="view.isSeriesHidden(ax.field) ? 'opacity-40' : ''"
         >
           <span
-            class="inline-block w-3.5 h-0.5"
-            :style="{ backgroundColor: ax.color }"
+            class="inline-block w-2 h-2 rounded-full"
+            :style="{ background: lp.entry.family.primary }"
           />
-          {{ ax.label.toLowerCase() }}
+          <span class="font-mono text-bp-ink-3 truncate max-w-[160px]">
+            {{ lp.entry.log.name }}
+          </span>
         </span>
+        <span v-if="allPsd.length === 0" class="text-bp-ink-3">no visible logs</span>
       </div>
       <div class="font-mono text-bp-ink-3">
-        drag to zoom &middot; click an axis chip to toggle
+        drag to zoom &middot; axis chips toggle every log
       </div>
     </footer>
   </section>

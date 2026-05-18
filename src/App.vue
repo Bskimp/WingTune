@@ -9,10 +9,9 @@
 // red and a small banner — most users will never see this state.
 
 import { computed, onMounted, ref } from 'vue';
-import { storeToRefs } from 'pinia';
 
 import { ParserClient } from '@/lib/wasmBridge';
-import { useLogStore } from '@/stores/log';
+import { useSessionStore } from '@/stores/session';
 import AppHeader from '@/components/AppHeader.vue';
 import FileDropZone from '@/components/FileDropZone.vue';
 import AnalysisView from '@/views/AnalysisView.vue';
@@ -20,10 +19,14 @@ import AnalysisView from '@/views/AnalysisView.vue';
 const wasmReady = ref(false);
 const wasmError = ref<string | null>(null);
 
-const logStore = useLogStore();
-const { scanReport } = storeToRefs(logStore);
+const session = useSessionStore();
 
-const hasLog = computed(() => scanReport.value !== null);
+// "Has any loaded log?" — NOT "any visible log". Otherwise the user
+// eye-toggling every log off (a legitimate compare-workflow action)
+// would yank them back to the drop zone with their logs still in
+// memory. The roster + AnalysisView handle the all-hidden visual
+// state gracefully on their own.
+const hasLog = computed(() => session.logs.size > 0);
 
 onMounted(async () => {
   try {

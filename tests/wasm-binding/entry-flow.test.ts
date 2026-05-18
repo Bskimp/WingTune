@@ -1,9 +1,9 @@
 // M1.3.5 end-to-end integration test for the entry-page flow:
 //
-//   real .bbl bytes → Node WASM scanLog() → useLogStore() populated as
-//   ParserClient.scan() would populate it → CapabilitySummary.vue mounted
-//   against the live store → assert the rendered DOM shows real values
-//   from the actual log
+//   real .bbl bytes → Node WASM scanLog() → useSessionStore() populated
+//   via __test_seedLog (bypasses worker, Node has no Worker) →
+//   CapabilitySummary.vue mounted against the live store →
+//   assert the rendered DOM shows real values from the actual log
 //
 // Bypasses the Web Worker (Node has no Worker) and the file-drop event
 // (no real DOM file events here). The worker boundary is covered by
@@ -37,7 +37,7 @@ import { createPinia, setActivePinia } from 'pinia';
 
 import { scanLog } from './pkg/wingtune_parser';
 import CapabilitySummary from '../../src/components/CapabilitySummary.vue';
-import { useLogStore } from '../../src/stores/log';
+import { useSessionStore } from '../../src/stores/session';
 
 const ENV_LOG = process.env.WINGTUNE_TEST_LOG;
 const LOG_PATH = ENV_LOG && existsSync(ENV_LOG) ? ENV_LOG : null;
@@ -83,20 +83,23 @@ describeIfLog('entry-flow (real wing log → store → CapabilitySummary)', () =
     };
 
     setActivePinia(createPinia());
-    const store = useLogStore();
-
-    // Mutate the store the same way `loadFile()` does internally, minus
-    // the worker round-trip. Setup-store refs are writable.
-    store.scanReport = scanReport;
-    store.time = scanReport.time_sec;
-    store.events = scanReport.events;
-    store.firmwareRevision = scanReport.firmware_revision;
-    store.firmwareDate = scanReport.firmware_date;
-    store.boardInfo = scanReport.board_info;
-    store.craftName = scanReport.craft_name;
-    store.fileName = 'LOG00113.BFL';
-    store.fileSize = bytes.byteLength;
-    store.parseTimeMs = 42;
+    // Seed via the session's TEST-ONLY helper so we bypass the worker
+    // round-trip (Node has no Worker). CapabilitySummary reads through
+    // `useActiveLog()` which projects from the session's first log, so
+    // the seeded log surfaces in the rendered DOM.
+    const session = useSessionStore();
+    session.__test_seedLog({
+      name: 'LOG00113.BFL',
+      fileSize: bytes.byteLength,
+      scanReport,
+      time: scanReport.time_sec,
+      events: scanReport.events,
+      firmwareRevision: scanReport.firmware_revision,
+      firmwareDate: scanReport.firmware_date,
+      boardInfo: scanReport.board_info,
+      craftName: scanReport.craft_name,
+      parseTimeMs: 42,
+    });
 
     const wrapper = mount(CapabilitySummary);
     await wrapper.vm.$nextTick();
@@ -142,12 +145,15 @@ describeIfLog('entry-flow (real wing log → store → CapabilitySummary)', () =
     };
 
     setActivePinia(createPinia());
-    const store = useLogStore();
-    store.scanReport = { ...raw, time_sec: Float32Array.from(raw.time_sec) } as never;
-    store.time = Float32Array.from(raw.time_sec);
-    store.firmwareRevision = raw.firmware_revision;
-    store.fileName = 'LOG00113.BFL';
-    store.fileSize = bytes.byteLength;
+    const session = useSessionStore();
+    const timeArr = Float32Array.from(raw.time_sec);
+    session.__test_seedLog({
+      name: 'LOG00113.BFL',
+      fileSize: bytes.byteLength,
+      scanReport: { ...raw, time_sec: timeArr } as never,
+      time: timeArr,
+      firmwareRevision: raw.firmware_revision,
+    });
 
     const wrapper = mount(CapabilitySummary);
     await wrapper.vm.$nextTick();
@@ -156,9 +162,8 @@ describeIfLog('entry-flow (real wing log → store → CapabilitySummary)', () =
     expect(swapBtn.exists()).toBe(true);
     await swapBtn.trigger('click');
 
-    expect(store.scanReport).toBeNull();
-    expect(store.fileName).toBeNull();
-    expect(store.fileSize).toBeNull();
-    expect(store.time.length).toBe(0);
+    // Swap calls session.reset(), which clears every loaded log.
+    // Empty session map is the canonical "back to drop zone" state.
+    expect(session.logs.size).toBe(0);
   });
 });

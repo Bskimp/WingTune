@@ -63,8 +63,18 @@ export const useViewStore = defineStore('view', () => {
    *  Session-scoped — not persisted across log loads; resetting per
    *  craft is a future polish if it turns out to matter. Stored as a
    *  Set value (replaced wholesale on toggle) so Vue's ref reactivity
-   *  fires on changes. */
+   *  fires on changes.
+   *
+   *  M1.7 Push 3b: keys are now logId-prefixed (`<logId>:<fieldName>`)
+   *  so the same field can be hidden on one log but visible on another.
+   *  Per-axis chips (R/P/Y) that should toggle "all logs at once"
+   *  call `toggleSeriesForAllLogs(field, logIds)`. */
   const hiddenSeries = ref<Set<string>>(new Set());
+
+  /** Logs the user has mass-hidden via the roster's eye toggle. When a
+   *  logId is in this set, panels iterating session.logs should skip
+   *  it entirely (treat as hidden regardless of per-field state). */
+  const hiddenLogs = ref<Set<string>>(new Set());
 
   /** Per-panel sample contributions to the cursor readout, keyed by a
    *  panel-chosen `sourceKey` (e.g. "tracking-roll", "pid-roll",
@@ -110,19 +120,76 @@ export const useViewStore = defineStore('view', () => {
     cursorPinned.value = false;
   }
 
-  /** Flip a series' hidden state. Immutable-update via Set replacement
-   *  so the watcher chain fires (`ref<Set>` doesn't track mutations
-   *  on the contained set object). */
-  function toggleSeries(fieldName: string) {
+  /** Compose the canonical `<logId>:<fieldName>` key. The separator is
+   *  `:` because BF field names never contain a colon — keeps the
+   *  parse trivial if we ever need to round-trip. */
+  function seriesKey(logId: string, fieldName: string): string {
+    return `${logId}:${fieldName}`;
+  }
+
+  /** Flip a series' hidden state for ONE log. Immutable-update via Set
+   *  replacement so the watcher chain fires (`ref<Set>` doesn't track
+   *  mutations on the contained set object). */
+  function toggleSeries(logId: string, fieldName: string) {
+    const key = seriesKey(logId, fieldName);
     const next = new Set(hiddenSeries.value);
-    if (next.has(fieldName)) next.delete(fieldName);
-    else next.add(fieldName);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
     hiddenSeries.value = next;
   }
 
-  /** Whether a given series is currently hidden. */
-  function isSeriesHidden(fieldName: string): boolean {
-    return hiddenSeries.value.has(fieldName);
+  /** Per-axis chip semantics: flip a field's hidden state across EVERY
+   *  loaded log in one shot. Uses the first logId's current state as
+   *  the reference — if it's currently hidden everywhere then this
+   *  un-hides on every log; if visible anywhere it hides on every log.
+   *  No-op when `logIds` is empty. */
+  function toggleSeriesForAllLogs(
+    fieldName: string,
+    logIds: readonly string[],
+  ) {
+    if (logIds.length === 0) return;
+    const refKey = seriesKey(logIds[0], fieldName);
+    const wasHidden = hiddenSeries.value.has(refKey);
+    const next = new Set(hiddenSeries.value);
+    for (const id of logIds) {
+      const key = seriesKey(id, fieldName);
+      if (wasHidden) next.delete(key);
+      else next.add(key);
+    }
+    hiddenSeries.value = next;
+  }
+
+  /** Whether a series is currently hidden for a given log. */
+  function isSeriesHidden(logId: string, fieldName: string): boolean {
+    return hiddenSeries.value.has(seriesKey(logId, fieldName));
+  }
+
+  /** Whether a series is hidden on ALL of the given logs — used by
+   *  per-axis chips so the chip appears "off" when no log is showing
+   *  that axis. Empty list returns false (nothing to be hidden). */
+  function isSeriesHiddenForAllLogs(
+    fieldName: string,
+    logIds: readonly string[],
+  ): boolean {
+    if (logIds.length === 0) return false;
+    for (const id of logIds) {
+      if (!hiddenSeries.value.has(seriesKey(id, fieldName))) return false;
+    }
+    return true;
+  }
+
+  /** Roster eye-toggle: flip a log's mass-hidden state. When hidden
+   *  every panel that iterates session.logs should skip this log. */
+  function toggleLogVisibility(logId: string) {
+    const next = new Set(hiddenLogs.value);
+    if (next.has(logId)) next.delete(logId);
+    else next.add(logId);
+    hiddenLogs.value = next;
+  }
+
+  /** Whether a log is mass-hidden via the roster eye toggle. */
+  function isLogHidden(logId: string): boolean {
+    return hiddenLogs.value.has(logId);
   }
 
   /** Register or update a panel's contribution to the cursor readout. */
@@ -145,6 +212,7 @@ export const useViewStore = defineStore('view', () => {
     cursorTime,
     cursorPinned,
     hiddenSeries,
+    hiddenLogs,
     cursorSamples,
     activeWorkspace,
     scrubStart,
@@ -156,7 +224,11 @@ export const useViewStore = defineStore('view', () => {
     clearCursorIfNotPinned,
     clearCursor,
     toggleSeries,
+    toggleSeriesForAllLogs,
     isSeriesHidden,
+    isSeriesHiddenForAllLogs,
+    toggleLogVisibility,
+    isLogHidden,
     setCursorSamples,
     clearCursorSamples,
   };

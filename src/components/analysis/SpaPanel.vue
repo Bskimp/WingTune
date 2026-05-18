@@ -14,10 +14,9 @@
 // be confusing.
 
 import { computed, onMounted, ref, watch } from 'vue';
-import { storeToRefs } from 'pinia';
 import type { AlignedData, Options } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { evaluateModules } from '@/lib/capabilityPredicates';
@@ -52,8 +51,8 @@ const AXES: AxisSpec[] = [
 
 const selectedAxis = ref<0 | 1 | 2>(0);
 
-const logStore = useLogStore();
-const { time, fields, hydrating, scanReport } = storeToRefs(logStore);
+const logStore = useActiveLog();
+const { time, fields, hydrating, scanReport } = logStore;
 
 useViewStore();  // touch the view store so cursor wiring (if added) works
 

@@ -19,20 +19,40 @@ function ensureReady(): Promise<unknown> {
   return ready;
 }
 
-// Bytes are transferred from the main thread on `scan` and cached here so
-// `hydrate` can re-iterate the same log without a second main-thread →
-// worker copy. Replaced on every new scan.
-let logBytes: Uint8Array | null = null;
+// Multi-tenant byte cache as of M1.7 slice 1: bytes are transferred from
+// the main thread on `scan` and cached here keyed by `logId` so the same
+// worker can serve N loaded logs (the multi-log compare workflow). A
+// `hydrate` call re-iterates the cached bytes for its logId without a
+// second main → worker copy. `close` evicts a single log; new scans for
+// an already-known logId silently overwrite. Memory grows linearly with
+// loaded logs — the session store is expected to call `close(logId)` on
+// removeLog so this map stays bounded.
+const logBytes = new Map<string, Uint8Array>();
 
 // Request / response shapes — these MUST stay in sync with the matching
 // types in `src/lib/wasmBridge.ts`. The shared shapes live in the bridge
 // so Layer 2/3 has a single import surface; this file just dispatches
 // against them.
 
-type ScanRequest = { id: number; type: 'scan'; bytes: Uint8Array };
-type HydrateRequest = { id: number; type: 'hydrate'; fieldIds: string[] };
+type ScanRequest = {
+  id: number;
+  type: 'scan';
+  logId: string;
+  bytes: Uint8Array;
+};
+type HydrateRequest = {
+  id: number;
+  type: 'hydrate';
+  logId: string;
+  fieldIds: string[];
+};
+type CloseRequest = { id: number; type: 'close'; logId: string };
 type InfoRequest = { id: number; type: 'info' };
-type WorkerRequest = ScanRequest | HydrateRequest | InfoRequest;
+type WorkerRequest =
+  | ScanRequest
+  | HydrateRequest
+  | CloseRequest
+  | InfoRequest;
 
 type WorkerResponse =
   | { id: number; ok: true; payload: unknown }
@@ -61,10 +81,12 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
 function dispatch(req: WorkerRequest): unknown {
   switch (req.type) {
     case 'scan': {
-      // Stash the bytes for subsequent hydrate calls. After
+      // Cache bytes under this logId for subsequent hydrate calls. After
       // `postMessage`'s transfer the main thread no longer owns this
       // buffer; the worker is now the source of truth for the log.
-      logBytes = req.bytes;
+      // Re-using a logId overwrites silently — the session store relies
+      // on this for the future "reload-in-place" path.
+      logBytes.set(req.logId, req.bytes);
       // Progress callback: forward to main thread tagged with the
       // request id so the bridge can dispatch per pending scan.
       const onProgress = (frames: number) => {
@@ -73,11 +95,21 @@ function dispatch(req: WorkerRequest): unknown {
       };
       return scanLog(req.bytes, onProgress);
     }
-    case 'hydrate':
-      if (!logBytes) {
-        throw new Error('hydrate: no log loaded — call scan() first');
+    case 'hydrate': {
+      const bytes = logBytes.get(req.logId);
+      if (!bytes) {
+        throw new Error(
+          `hydrate: no log with id "${req.logId}" — call scan() first or check the log was not closed`,
+        );
       }
-      return wasmHydrate(logBytes, req.fieldIds);
+      return wasmHydrate(bytes, req.fieldIds);
+    }
+    case 'close':
+      // Idempotent: deleting an unknown logId is not an error. Session
+      // store may close a log that was never successfully scanned (e.g.
+      // load failure) and the worker just no-ops in that case.
+      logBytes.delete(req.logId);
+      return undefined;
     case 'info':
       return parser_info();
   }

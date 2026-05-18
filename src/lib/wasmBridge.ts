@@ -118,11 +118,33 @@ export type ScanError =
 export type SourceHandle = { bytes: Uint8Array };
 
 // -- Worker protocol (must match parser.worker.ts) -------------------------
+//
+// Multi-tenant as of M1.7 slice 1: the worker holds a `Map<logId, bytes>`
+// so N logs can coexist for the multi-log compare workflow. Every
+// scan/hydrate/close carries a `logId` so the worker can route to the
+// right cached bytes. `info` is global and carries no logId. The session
+// store assigns logIds at addLog time; the bridge is logId-agnostic and
+// just forwards.
 
-type ScanRequest = { id: number; type: 'scan'; bytes: Uint8Array };
-type HydrateRequest = { id: number; type: 'hydrate'; fieldIds: string[] };
+type ScanRequest = {
+  id: number;
+  type: 'scan';
+  logId: string;
+  bytes: Uint8Array;
+};
+type HydrateRequest = {
+  id: number;
+  type: 'hydrate';
+  logId: string;
+  fieldIds: string[];
+};
+type CloseRequest = { id: number; type: 'close'; logId: string };
 type InfoRequest = { id: number; type: 'info' };
-type WorkerRequest = ScanRequest | HydrateRequest | InfoRequest;
+type WorkerRequest =
+  | ScanRequest
+  | HydrateRequest
+  | CloseRequest
+  | InfoRequest;
 
 // `Omit<WorkerRequest, 'id'>` on a discriminated union collapses to the
 // intersection of common properties, losing the per-variant fields. We
@@ -131,6 +153,7 @@ type WorkerRequest = ScanRequest | HydrateRequest | InfoRequest;
 type WorkerRequestBody =
   | Omit<ScanRequest, 'id'>
   | Omit<HydrateRequest, 'id'>
+  | Omit<CloseRequest, 'id'>
   | Omit<InfoRequest, 'id'>;
 
 type WorkerResponse =
@@ -230,14 +253,21 @@ export class ParserClient {
   }
 
   /** Single-pass scan: capability report + time axis + event list, no
-   *  per-field arrays. The bytes are transferred to the worker (caller
-   *  loses access to `handle.bytes` after this returns).
+   *  per-field arrays. The bytes are transferred to the worker, which
+   *  caches them under `logId` for subsequent `hydrate(logId, …)` calls.
+   *  Caller loses access to `handle.bytes` after this returns (the
+   *  ArrayBuffer is detached).
+   *
+   *  `logId` is assigned by the session store (one per loaded log) and
+   *  is opaque to the bridge — anything stable + unique works. Re-using
+   *  a logId silently overwrites the worker's cached bytes for that id.
    *
    *  `onProgress` (optional) is called multiple times during scan with
    *  the running frame count. Caller estimates a percent against an
    *  expected-total derived from file size. Callback errors are not
    *  caught here — keep the callback simple (just update a ref). */
   async scan(
+    logId: string,
     handle: SourceHandle,
     options: { onProgress?: (frames: number) => void } = {},
   ): Promise<ScanReport> {
@@ -245,7 +275,7 @@ export class ParserClient {
     // Transfer the underlying ArrayBuffer so the worker doesn't copy. After
     // this call the caller's Uint8Array view is detached.
     const raw = await call<RawScanReport>(
-      { type: 'scan', bytes },
+      { type: 'scan', logId, bytes },
       {
         transfer: [bytes.buffer as ArrayBuffer],
         onProgress: options.onProgress,
@@ -256,7 +286,8 @@ export class ParserClient {
     return { ...raw, time_sec: Float32Array.from(raw.time_sec) };
   }
 
-  /** Hydrate the named fields. Returns `{ fields, gpsTimesSec }`:
+  /** Hydrate the named fields for a previously-scanned log. Returns
+   *  `{ fields, gpsTimesSec }`:
    *
    *   - `fields` — `Map<name, Float32Array>` of one value-per-frame per
    *     requested id. Main-frame fields align with `scanReport.time_sec`.
@@ -270,13 +301,17 @@ export class ParserClient {
    *  (callers should check `.length === 0` to distinguish from "field
    *  exists but had no samples"). The implementation re-iterates the
    *  full log per call; the `FrameIndex` seek-skip optimization is a
-   *  follow-up. */
-  async hydrate(fieldIds: string[]): Promise<HydrateResult> {
+   *  follow-up.
+   *
+   *  Rejects if `logId` was never scanned (or was closed) — the worker
+   *  has no cached bytes to iterate. */
+  async hydrate(logId: string, fieldIds: string[]): Promise<HydrateResult> {
     const raw = await call<{
       fields: Array<[string, number[]]>;
       gps_times_sec: number[];
     }>({
       type: 'hydrate',
+      logId,
       fieldIds,
     });
     // serde-wasm-bindgen renders Vec<(String, Vec<f32>)> as an array of
@@ -287,6 +322,13 @@ export class ParserClient {
       fields.set(name, Float32Array.from(values));
     }
     return { fields, gpsTimesSec: Float32Array.from(raw.gps_times_sec) };
+  }
+
+  /** Release the worker's cached bytes for a log. Call when removing a
+   *  log from the session so its bytes don't sit in worker memory
+   *  forever. Idempotent: closing an unknown logId is not an error. */
+  async closeLog(logId: string): Promise<void> {
+    await call<void>({ type: 'close', logId });
   }
 }
 

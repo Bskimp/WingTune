@@ -24,7 +24,7 @@ import { computed, onMounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import type { AlignedData, Options } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useViewStore, type CursorSample } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
@@ -52,9 +52,9 @@ const REQUIRED_AND_OPTIONAL = [
   'gps:GPS_speed',
 ] as const;
 
-const logStore = useLogStore();
+const logStore = useActiveLog();
 const view = useViewStore();
-const { time, gpsTimeSec, fields, hydrating } = storeToRefs(logStore);
+const { time, gpsTimeSec, fields, hydrating } = logStore;
 
 onMounted(() => {
   logStore.ensureFields([...REQUIRED_AND_OPTIONAL]);

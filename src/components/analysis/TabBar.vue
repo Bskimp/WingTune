@@ -13,7 +13,7 @@
 import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import { useViewStore, type AnalysisTab } from '@/stores/view';
 import { evaluateModules } from '@/lib/capabilityPredicates';
 import { gatherRecommendations } from '@/lib/recommendations';
@@ -21,8 +21,7 @@ import { gatherRecommendations } from '@/lib/recommendations';
 const view = useViewStore();
 const { activeTab } = storeToRefs(view);
 
-const logStore = useLogStore();
-const { scanReport, fields, time, gpsTimeSec } = storeToRefs(logStore);
+const { scanReport, fields, time, gpsTimeSec } = useActiveLog();
 
 const filterConfig = computed(() => scanReport.value?.filter_config ?? null);
 

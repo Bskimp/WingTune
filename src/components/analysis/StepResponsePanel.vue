@@ -5,6 +5,14 @@
 // Plasmatree convention since R/P/Y curves often differ enough that
 // overlay obscures detail.
 //
+// M1.7 Push 3b — multi-log: every loaded log produces its own step
+// response for the selected axis; curves are overlaid with per-log
+// tinted colors (axis base hue → log family). Stats in the header
+// (peak %, settle time) belong to the FIRST visible log because
+// per-log columns blow out at N≥3 and the dominant tuning question
+// is usually "is THIS log's response cleaner than that one?" —
+// answered by visual overlay, not by a table.
+//
 // Reference line at y=1.0 = perfect tracking (the plane responds
 // instantly to the commanded setpoint and holds). Real responses ramp
 // up to 1.0 (sluggish) or overshoot above (aggressive PID). Settling
@@ -12,14 +20,19 @@
 // overshoot indicator. numSegments = how many manoeuvre windows
 // passed the setpoint-RMS gate.
 
-import { computed, onMounted, ref, watch } from 'vue';
-import { storeToRefs } from 'pinia';
-import type { AlignedData, Options } from 'uplot';
+import { computed, ref, watch, watchEffect } from 'vue';
+import type { AlignedData, Options, Series } from 'uplot';
 
-import { useLogStore } from '@/stores/log';
+import { useSessionStore, type LogState } from '@/stores/session';
+import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
 import { estimateSampleRate } from '@/lib/spectrum';
 import { computeStepResponse, type StepResponseResult } from '@/lib/stepResponse';
+import {
+  familyForIndex,
+  tintTowardFamily,
+  type FamilySpec,
+} from '@/lib/logColors';
 
 const COLORS = {
   ink3:   '#7a90b0',
@@ -37,6 +50,7 @@ interface AxisSpec {
   short: 'R' | 'P' | 'Y';
   setpoint: string;
   gyro: string;
+  /** Base axis hue. Per-log render tints toward family. */
   color: string;
 }
 
@@ -51,160 +65,271 @@ const WINDOW_SEC = 0.5;
 
 const selectedAxis = ref<0 | 1 | 2>(0);
 
-const logStore = useLogStore();
-const { time, fields, hydrating } = storeToRefs(logStore);
+const session = useSessionStore();
+const view = useViewStore();
 
 const axisSpec = computed(() => AXES[selectedAxis.value]);
 
-async function hydrateForAxis(id: 0 | 1 | 2) {
-  const a = AXES[id];
-  await logStore.ensureFields([a.setpoint, a.gyro]);
+interface LogEntry {
+  log: LogState;
+  family: FamilySpec;
+  hidden: boolean;
 }
-onMounted(() => hydrateForAxis(selectedAxis.value));
-watch(selectedAxis, hydrateForAxis);
 
-const setpointArr = computed<Float32Array | undefined>(
-  () => fields.value.get(axisSpec.value.setpoint),
-);
-const gyroArr = computed<Float32Array | undefined>(
-  () => fields.value.get(axisSpec.value.gyro),
-);
-
-const isHydrating = computed(
-  () => hydrating.value.has(axisSpec.value.setpoint) ||
-        hydrating.value.has(axisSpec.value.gyro),
-);
-
-const sampleRateHz = computed(() => estimateSampleRate(time.value));
-
-const stepResult = computed<StepResponseResult | null>(() => {
-  const sp = setpointArr.value;
-  const gy = gyroArr.value;
-  const sr = sampleRateHz.value;
-  if (!sp || !gy || sr <= 0) return null;
-  if (sp.length < SEGMENT_LEN || gy.length < SEGMENT_LEN) return null;
-  return computeStepResponse(sp, gy, sr, {
-    segmentLen: SEGMENT_LEN,
-    windowSec: WINDOW_SEC,
-  });
+const logEntries = computed<LogEntry[]>(() => {
+  const out: LogEntry[] = [];
+  let idx = 0;
+  for (const log of session.logs.values()) {
+    out.push({
+      log,
+      family: familyForIndex(idx),
+      hidden: view.isLogHidden(log.id),
+    });
+    idx += 1;
+  }
+  return out;
 });
 
-const ready = computed(() => {
-  const r = stepResult.value;
-  return r !== null && r.numSegments > 0;
+const visibleEntries = computed(() =>
+  logEntries.value.filter((e) => !e.hidden),
+);
+
+// Eager-hydrate setpoint + gyro for the selected axis on every loaded
+// log. Re-runs when selectedAxis changes or logs are added.
+watchEffect(() => {
+  const a = axisSpec.value;
+  for (const { log } of logEntries.value) {
+    session.ensureFields(log.id, [a.setpoint, a.gyro]).catch(() => {
+      // Hydration failures surface on the log's scanError; this
+      // panel just skips that log's curve.
+    });
+  }
+});
+
+interface LogStepResult {
+  entry: LogEntry;
+  result: StepResponseResult | null;
+}
+
+const allStep = computed<LogStepResult[]>(() => {
+  const a = axisSpec.value;
+  const out: LogStepResult[] = [];
+  for (const entry of visibleEntries.value) {
+    const sp = entry.log.fields.get(a.setpoint);
+    const gy = entry.log.fields.get(a.gyro);
+    const sr = estimateSampleRate(entry.log.time);
+    if (!sp || !gy || sr <= 0 || sp.length < SEGMENT_LEN || gy.length < SEGMENT_LEN) {
+      out.push({ entry, result: null });
+      continue;
+    }
+    const result = computeStepResponse(sp, gy, sr, {
+      segmentLen: SEGMENT_LEN,
+      windowSec: WINDOW_SEC,
+    });
+    out.push({ entry, result });
+  }
+  return out;
+});
+
+const isHydrating = computed(() => {
+  const a = axisSpec.value;
+  for (const { log } of visibleEntries.value) {
+    if (log.hydrating.has(a.setpoint) || log.hydrating.has(a.gyro)) return true;
+  }
+  return false;
+});
+
+const ready = computed(() =>
+  allStep.value.some((lr) => lr.result !== null && lr.result.numSegments > 0),
+);
+
+/** Reference response-time axis: longest response.time across visible
+ *  logs (all should be ~WINDOW_SEC samples but sample rates may
+ *  differ). Shorter ones pad with NaN. */
+const refTime = computed<Float32Array>(() => {
+  let best: Float32Array | null = null;
+  for (const lr of allStep.value) {
+    if (lr.result && (!best || lr.result.time.length > best.length)) {
+      best = lr.result.time;
+    }
+  }
+  return best ?? new Float32Array(0);
 });
 
 const data = computed<AlignedData>(() => {
-  if (!ready.value) {
-    return [new Float32Array(0), new Float32Array(0)] as unknown as AlignedData;
+  if (!ready.value || refTime.value.length === 0) {
+    return [new Float32Array(0)] as unknown as AlignedData;
   }
-  const r = stepResult.value!;
-  return [r.time, r.response] as unknown as AlignedData;
+  const xLen = refTime.value.length;
+  const blank = (): Float32Array => {
+    const b = new Float32Array(xLen);
+    b.fill(NaN);
+    return b;
+  };
+  const padToRef = (src: Float32Array | null): Float32Array => {
+    if (!src) return blank();
+    if (src.length === xLen) return src;
+    const out = blank();
+    for (let i = 0; i < Math.min(src.length, xLen); i++) out[i] = src[i];
+    return out;
+  };
+  const series: Float32Array[] = [];
+  for (const lr of allStep.value) {
+    series.push(padToRef(lr.result?.response ?? null));
+  }
+  return [refTime.value, ...series] as unknown as AlignedData;
 });
 
-const opts = computed<Options>(() => ({
-  width: 800,
-  height: 280,
-  legend: { show: false },
-  scales: {
-    x: { time: false },
-    y: { auto: true },
-  },
-  cursor: {
-    drag: { x: true, y: false, uni: 50 },
-    focus: { prox: 30 },
-    points: { show: true, size: 5 },
-  },
-  series: [
-    {},
-    { label: 'step response', stroke: axisSpec.value.color, width: 1.5 },
-  ],
-  axes: [
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      values: (_u, splits) => splits.map((v) => `${(v * 1000).toFixed(0)} ms`),
+const opts = computed<Options>(() => {
+  const ax = axisSpec.value;
+  const series: Series[] = [{}];
+  for (const lr of allStep.value) {
+    const tinted = tintTowardFamily(ax.color, lr.entry.family);
+    series.push({
+      label: `${lr.entry.log.name} ${ax.short}`,
+      stroke: tinted,
+      width: 1.5,
+    });
+  }
+  return {
+    width: 800,
+    height: 280,
+    legend: { show: false },
+    scales: {
+      x: { time: false },
+      y: { auto: true },
     },
-    {
-      stroke: COLORS.ink3,
-      grid:   { stroke: COLORS.line, width: 0.5 },
-      ticks:  { stroke: COLORS.line, width: 0.5 },
-      font:   '10px ui-monospace, Menlo, Consolas, monospace',
-      size:   50,
-      values: (_u, splits) => splits.map((v) => v.toFixed(2)),
+    cursor: {
+      drag: { x: true, y: false, uni: 50 },
+      focus: { prox: 30 },
+      points: { show: true, size: 5 },
     },
-  ],
-  hooks: {
-    // Reference markers: dashed horizontal at y=1.0 (perfect tracking
-    // target) + dashed at y=0 baseline. uPlot's bbox is in device
-    // pixels; valToPos with canPx=true matches that frame.
-    draw: [
-      (u) => {
-        const ctx = u.ctx;
-        const left = u.bbox.left;
-        const width = u.bbox.width;
-        ctx.save();
-        ctx.strokeStyle = '#7a90b066';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 3]);
-        const y1 = u.valToPos(1.0, 'y', true);
-        ctx.beginPath();
-        ctx.moveTo(left, y1); ctx.lineTo(left + width, y1);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
+    series,
+    axes: [
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        values: (_u, splits) => splits.map((v) => `${(v * 1000).toFixed(0)} ms`),
+      },
+      {
+        stroke: COLORS.ink3,
+        grid:   { stroke: COLORS.line, width: 0.5 },
+        ticks:  { stroke: COLORS.line, width: 0.5 },
+        font:   '10px ui-monospace, Menlo, Consolas, monospace',
+        size:   50,
+        values: (_u, splits) => splits.map((v) => v.toFixed(2)),
       },
     ],
-  },
-}));
+    hooks: {
+      draw: [
+        (u) => {
+          const ctx = u.ctx;
+          const left = u.bbox.left;
+          const width = u.bbox.width;
+          ctx.save();
+          ctx.strokeStyle = '#7a90b066';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
+          const y1 = u.valToPos(1.0, 'y', true);
+          ctx.beginPath();
+          ctx.moveTo(left, y1); ctx.lineTo(left + width, y1);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+        },
+      ],
+    },
+  };
+});
 
 const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
 
+// Per-log visibility sync via uPlot setSeries. Series order matches
+// allStep iteration (one series per log).
+watch(
+  [
+    plot.updateCount,
+    () => visibleEntries.value.map((e) => e.log.id).join(','),
+    () => visibleEntries.value.map((e) => view.isSeriesHidden(e.log.id, 'step')),
+  ],
+  () => {
+    const u = plot.instance();
+    if (!u) return;
+    allStep.value.forEach((lr, i) => {
+      const show = !view.isSeriesHidden(lr.entry.log.id, 'step');
+      if (u.series[i + 1] && u.series[i + 1].show !== show) {
+        u.setSeries(i + 1, { show });
+      }
+    });
+  },
+  { immediate: true },
+);
+
 function resetZoom() { plot.resetZoom(); }
 function selectAxis(id: 0 | 1 | 2) { selectedAxis.value = id; }
 
+// Stats anchor on the FIRST visible log with a successful result.
+// Per-log column would be the natural multi-log evolution but at
+// N≥3 it crowds the header; visual overlay carries the comparison.
+const firstResult = computed<StepResponseResult | null>(() => {
+  for (const lr of allStep.value) {
+    if (lr.result && lr.result.numSegments > 0) return lr.result;
+  }
+  return null;
+});
+
 const pendingMessage = computed(() => {
+  if (visibleEntries.value.length === 0) return 'no logs loaded';
   if (isHydrating.value) return `hydrating ${axisSpec.value.label.toLowerCase()} setpoint + gyro…`;
-  if (sampleRateHz.value <= 0) return 'time axis empty — load a log first';
-  if (!setpointArr.value?.length || !gyroArr.value?.length) {
-    return `${axisSpec.value.label.toLowerCase()} setpoint or gyro field missing from this log`;
+  const anyHasFields = allStep.value.some(
+    (lr) => lr.entry.log.fields.get(axisSpec.value.setpoint)?.length &&
+            lr.entry.log.fields.get(axisSpec.value.gyro)?.length,
+  );
+  if (!anyHasFields) {
+    return `${axisSpec.value.label.toLowerCase()} setpoint or gyro field missing from the loaded log(s)`;
   }
-  if (setpointArr.value.length < SEGMENT_LEN) {
-    return `log too short for ${SEGMENT_LEN}-sample analysis window — need ≥ ${SEGMENT_LEN} samples`;
+  const anyEnoughSamples = allStep.value.some(
+    (lr) => (lr.entry.log.fields.get(axisSpec.value.setpoint)?.length ?? 0) >= SEGMENT_LEN,
+  );
+  if (!anyEnoughSamples) {
+    return `log(s) too short for ${SEGMENT_LEN}-sample analysis window — need ≥ ${SEGMENT_LEN} samples`;
   }
-  if (stepResult.value && stepResult.value.numSegments === 0) {
+  if (allStep.value.every((lr) => lr.result === null || lr.result.numSegments === 0)) {
     return `setpoint never exceeded the deconvolution gate — fly more aggressive manoeuvres on ${axisSpec.value.label.toLowerCase()} to characterize the step response`;
   }
   return 'computing step response…';
 });
 
 const settlingText = computed(() => {
-  const r = stepResult.value;
+  const r = firstResult.value;
   if (!r || r.settlingTimeMs < 0) return '—';
   return `${r.settlingTimeMs.toFixed(0)} ms`;
 });
 
 const peakPctText = computed(() => {
-  const r = stepResult.value;
+  const r = firstResult.value;
   if (!r) return '—';
   return `${(r.peakAmplitude * 100).toFixed(0)} %`;
 });
 
 const segmentInfo = computed(() => {
-  const r = stepResult.value;
+  const r = firstResult.value;
   if (!r) return '';
-  return `${SEGMENT_LEN}-pt Wiener deconv · ${r.numSegments.toLocaleString()} segments · ${(WINDOW_SEC * 1000).toFixed(0)} ms window`;
+  const base = `${SEGMENT_LEN}-pt Wiener deconv · ${r.numSegments.toLocaleString()} segments · ${(WINDOW_SEC * 1000).toFixed(0)} ms window`;
+  const n = visibleEntries.value.length;
+  if (n > 1) return `${base} · ${n} logs overlaid (stats: log 1)`;
+  return base;
 });
 
 const peakToneClass = computed(() => {
-  const r = stepResult.value;
+  const r = firstResult.value;
   if (!r) return 'text-bp-ink';
-  if (r.peakAmplitude > 1.30) return 'text-bp-stamp';   // hard overshoot
-  if (r.peakAmplitude > 1.10) return 'text-bp-warn';    // mild overshoot
-  if (r.peakAmplitude < 0.85) return 'text-bp-warn';    // sluggish
+  if (r.peakAmplitude > 1.30) return 'text-bp-stamp';
+  if (r.peakAmplitude > 1.10) return 'text-bp-warn';
+  if (r.peakAmplitude < 0.85) return 'text-bp-warn';
   return 'text-bp-ink';
 });
 </script>
@@ -224,7 +349,7 @@ const peakToneClass = computed(() => {
       </div>
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
-        <div v-if="stepResult && ready" class="flex gap-3 items-baseline">
+        <div v-if="firstResult && ready" class="flex gap-3 items-baseline">
           <div class="text-right">
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">peak</div>
             <div class="font-mono text-[13px]" :class="peakToneClass">{{ peakPctText }}</div>
@@ -273,15 +398,24 @@ const peakToneClass = computed(() => {
     </div>
 
     <footer
-      class="flex justify-between items-center px-3 py-2 border-t border-bp-line text-[10.5px]"
+      class="flex flex-wrap justify-between items-center px-3 py-2 border-t border-bp-line text-[10.5px] gap-y-1"
     >
-      <div class="flex gap-4 items-center font-sans text-bp-ink-2">
-        <span class="flex items-center gap-1.5">
+      <div class="flex flex-wrap gap-x-4 gap-y-1 items-center font-sans text-bp-ink-2">
+        <!-- per-log legend: family-tinted dot + filename. Active-log
+             gets the axis-base swatch as a reference. -->
+        <span
+          v-for="lr in allStep"
+          :key="lr.entry.log.id"
+          class="flex items-center gap-1.5"
+          :class="lr.result && lr.result.numSegments > 0 ? '' : 'opacity-50'"
+        >
           <span
             class="inline-block w-3.5 h-0.5"
-            :style="{ backgroundColor: axisSpec.color }"
+            :style="{ background: tintTowardFamily(axisSpec.color, lr.entry.family) }"
           />
-          response
+          <span class="font-mono text-bp-ink-3 truncate max-w-[160px]">
+            {{ lr.entry.log.name }}
+          </span>
         </span>
         <span class="flex items-center gap-1.5">
           <span
@@ -292,7 +426,7 @@ const peakToneClass = computed(() => {
         </span>
       </div>
       <div class="font-mono text-bp-ink-3">
-        peak &lt; 1.10 = clean &middot; 1.10–1.30 = mild overshoot &middot; &gt; 1.30 = hard overshoot
+        peak &lt; 1.10 = clean &middot; 1.10–1.30 = mild &middot; &gt; 1.30 = hard overshoot
       </div>
     </footer>
   </section>

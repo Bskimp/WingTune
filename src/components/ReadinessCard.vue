@@ -20,9 +20,8 @@
 // debug-mode fallback).
 
 import { computed } from 'vue';
-import { storeToRefs } from 'pinia';
 
-import { useLogStore } from '@/stores/log';
+import { useActiveLog } from '@/composables/useActiveLog';
 import {
   evaluateModules,
   type Capability,
@@ -30,8 +29,8 @@ import {
   type ModuleReport,
 } from '@/lib/capabilityPredicates';
 
-const logStore = useLogStore();
-const { scanReport } = storeToRefs(logStore);
+const logStore = useActiveLog();
+const { scanReport } = logStore;
 
 const report = computed<ModuleReport | null>(() => {
   const r = scanReport.value;
