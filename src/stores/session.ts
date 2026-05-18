@@ -225,6 +225,25 @@ export const useSessionStore = defineStore('session', () => {
         log.gpsTimeSec = hydrated.gpsTimesSec;
       }
       maybeEvictLog(log);
+    } catch (err) {
+      // The worker can lose its byte cache for a log between scan and
+      // hydrate — most commonly when Vite HMR rebuilds the worker
+      // module during dev, but also possible if the worker was
+      // restarted for any reason while the session store kept the log
+      // metadata. Surface as a soft warning rather than an unhandled
+      // promise rejection (which read as a scary red console error
+      // even though the user's flow isn't actually broken — they just
+      // need to re-drop the log). Real hydrate errors with different
+      // shapes still propagate.
+      const message = err instanceof Error ? err.message
+        : (err as { message?: string } | undefined)?.message;
+      if (typeof message === 'string' && message.includes('no log with id')) {
+        console.warn(
+          `[wingtune] hydrate dropped for log "${id}" — worker lost the byte cache (HMR or worker restart). Re-drop the log to recover.`,
+        );
+        return;
+      }
+      throw err;
     } finally {
       for (const n of missing) log.hydrating.delete(n);
     }
