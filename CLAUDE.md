@@ -386,27 +386,128 @@ bearing design decisions.
   belt-and-suspenders. 140/140 unit tests + skipped wasm-binding
   pass; typecheck clean. See [[project-m17-multi-log-architecture]]
   for the Float32 precision lesson.
+- **M1.7.2 signal registry guards + corpus unblock (2026-05-18)** —
+  Wide-blast session that shipped registry safety guards, found
+  + fixed two latent silent-failure bugs, unblocked the corpus
+  pull, and pinned vitest. High-level:
+    · **Signal registry**: `SignalSource` gains optional
+      `expected_range` + `min_firmware`; resolveSignal returns a
+      new `out_of_range` state with `{expected, observed, source}`
+      when sampled values fall outside the declared range. Walker
+      promotes most-informative fallback (out_of_range > inactive
+      > missing). Parser-side: `SampleCheck` now tracks
+      `value_min`/`value_max` during scan's stride-sample loop;
+      `CapabilityReport.firmware_revision` mirrored from
+      ScanReport so resolveSignal can apply `min_firmware` gates
+      without separate plumbing. ReadinessCard renders the new
+      state with a distinct stamp-color icon + structured
+      observed/expected block. `capabilityPredicates` surfaces
+      `rangeInfo` through `ModuleReport`. 17 new unit tests.
+    · **Main-frame `wing*` field bindings**: 10 SignalDefs now
+      prefer modern USE_WING main-frame fields (`wingTpaFactor`,
+      `wingSpa[axis]`, `wingSetpointAdj[axis]`,
+      `wingSTermPost[axis]`, etc.) over their DEBUG_ channel
+      fallbacks. Analytics fire without needing the right
+      `debug_mode` multiplexed. Three new side-benefit signals
+      exposed (`attitude_roll`, `attitude_pitch`, `throttle_calc`
+      from DEBUG_TPA ch1/2/3).
+    · **DEBUG_TPA channel layout corrected** against limonspb's
+      PR #13895 reference: `tpa_factor`=ch0, `tpa_arg`=ch5 (was
+      ch4), `tpa_speed_est`=ch4 (was ch3, with `[0,1500]` range
+      for the ×10 encoding). Previous best-guesses had `tpa_arg`
+      and `tpa_speed_est` on the wrong channels.
+    · **blackbox-log fork: BF 4.6 support added.** `types/data/
+      Betaflight/4.6/` cloned from 4.5 then `debug_mode.yaml`
+      patched from 2026.6 (only debug_mode differs between the
+      two). `InternalFirmware::Betaflight4_6` variant inserted +
+      `From<Firmware>` mapping. `BETAFLIGHT_SUPPORT` range
+      extended (`4.2..4.6` was exclusive — silently rejected 4.6
+      logs). Codegen rerun. Committed as `a7b3f42` then amended
+      to `6203d45` / `183c43d` over several iterations as missing
+      4.6 YAML files were caught.
+    · **blackbox-log fork: 3 new debug modes added.** YAML +
+      regenerated source for DEBUG_GPS_RESCUE_WING (102),
+      DEBUG_SERVO_AUTOTRIM (103), DEBUG_AUTOLAND (104). Also
+      caught a latent codegen-stale bug — Brian's prior commit
+      `4dd54b5` added TPA/SPA/S_TERM/WING_SETPOINT YAML entries
+      but never re-ran codegen, so the generated source never
+      had match arms for them. Regen run + committed as
+      `3e6d96c`. All wing-mode logs decode through the parser now.
+    · **Firmware silent data loss bug found + fixed (`eeafdb052`).**
+      In `betaflight-wing-msp`, the wing-block writes in
+      `writeIntraframe` and `writeInterframe` were AT THE END of
+      each frame (after motor/servo/eRPM) but the
+      `blackboxMainFields[]` header def had them BETWEEN axisS
+      and rcCommand. The byte stream alignment broke at the first
+      `NEG_14BIT` (vbatLatest) — parser tried to read
+      variable-byte SIGNED_VB at that position and consumed the
+      wrong number of bytes, cascading to ~98% of frames being
+      silently skipped as "corrupted." A 2.4 MB bench log decoded
+      as only 25 main frames before the fix; same firmware after
+      the reorder + reflash decodes 22k+ frames at 1000+ Hz.
+      Isolated via a new `crates/wingtune-parser/examples/probe_log.rs`
+      diagnostic binary (kept as a permanent tool — paid for
+      itself today).
+    · **TPA panel two-bug fix** (`fix(tpa)` commit). Panel
+      explicitly rejected non-debug source kinds
+      (`r.source.kind !== 'debug'`) so the new main-frame routing
+      resolved but the panel discarded it. Also `buildTpaFitInputs`
+      passed raw field values straight into the fit math which
+      expects `x ∈ [0, 1]` — but BF emits `tpa_arg` and
+      `tpa_factor` as `value × 1000`. Both fixed with a single
+      `BF_TPA_SCALE = 1/1000` constant at the input boundary
+      (single source of truth — recommender flows through the
+      same builder). Latent since M5 shipped — never noticed
+      because no prior log had exercised the panel successfully
+      (btfl_002's calibration log had `debug_mode = WingLaunch`
+      so the panel always quietly showed "set debug_mode = TPA").
+    · **Session hydrate-id race graceful handling.** Vite HMR in
+      dev rebuilds the parser worker module → wipes the worker's
+      per-logId byte cache → next panel mount triggers
+      `ensureFields` → worker says "no bytes for this id" →
+      uncaught promise rejection. `ensureFields` now catches the
+      specific "no log with id" error class and surfaces as a
+      `console.warn` with a "re-drop the log to recover" hint.
+      Other hydrate errors with different shapes still propagate.
+    · **vitest pinned to 4.1.5** (no caret). 4.1.6 has a
+      runner-initialization regression on this stack that crashes
+      every test file at the first `describe()` call. Downgrading
+      to 4.1.5 makes all 164 tests pass instantly. See
+      [[project-vitest-pin]] memory.
+    · **Initial corpus pull landed.** Downloaded the 4 limonspb
+      PR #13895 reference logs into `tests/corpus-private/`
+      (gitignored). All 4 validate cleanly through
+      `npm run corpus:validate:private` (new script) once the
+      blackbox-log fork has 4.6 YAML. Real airframes, BF 4.6.0,
+      DEBUG_TPA active, GPS lock — exercise M3 + M5 +
+      DEBUG_TPA cross-check end-to-end (would have caught the
+      TPA × 1000 scaling bug if it had existed earlier).
+    · **New `wingtune-recommender` skill** added at
+      `.claude/skills/`. Codifies safety invariants for the
+      "tool tells user what to do" surface — the only major code
+      path that was previously without a codified skill. See the
+      CLAUDE.md skills index for trigger conditions.
 
 **In flight / pending:**
 
-- **M3 / M5 / M6 / M7 visual validation flights (held)** — Need
-  calibration flights with the right debug modes to fully validate:
-    · M3 (BASIC airspeed fit) + M5 (HYPERBOLIC TPA curve fit) +
-      DEBUG_TPA cross-check: a sustained-cruise wing flight with
-      throttle variation + GPS lock + `debug_mode = TPA` + ideally
-      `attitude[1]` in main frame.
-    · M4 raw-gyro overlay: a flight with `debug_mode = GYRO_RAW`.
-    · M6 (SPA effectiveness): a flight with `debug_mode = SPA`.
-    · M7 (S-term TPA viz): a flight with `debug_mode = S_TERM`.
-  BF logs one debug mode per flight, so these need separate
-  calibration sorties. Current logs (LOG00113, btfl_002) don't
-  satisfy any — the panels correctly emit blocked/missing pending
-  states. "Go fly" task, not a code task.
-- Verify `tpa_factor` is DEBUG_TPA channel 2 on first real flight.
-  The signal registry guesses channel 2 (the natural ordering
-  after `tpa_speed_est`=0 and `tpa_arg`=1), but the BF source
-  channel index wasn't pinned during the M5 recon pass. Wrong
-  channel index would surface garbage as "resolved" output.
+- **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
+  The 4 limonspb PR #13895 reference logs in
+  `tests/corpus-private/` exercise M3 BASIC airspeed fit + M5
+  HYPERBOLIC TPA curve fit + DEBUG_TPA cross-check end-to-end.
+  Brian's own bench logs work too now (post writer-order fix).
+  Real flight-data validation still wants throttle-varying
+  cruise + GPS lock to characterize the TPA curve across the
+  full airspeed range — Brian to fly when conditions allow.
+- **M6 / M7 still held on flight data.** Need a flight with
+  `debug_mode = SPA` for M6 effectiveness validation; a flight
+  with `debug_mode = S_TERM` for M7 viz. (Note: on USE_WING
+  firmware, the main-frame `wingSpa[]` / `wingSTermPost[]`
+  fields make these debug modes unnecessary for analytics —
+  the registry routes through main-frame first. So in practice
+  any USE_WING log with motion exercises both.)
+- **M4 raw-gyro overlay still held** on a `debug_mode = GYRO_RAW`
+  flight (no main-frame fallback for the unfiltered gyro
+  alongside the standard filtered gyro).
 - Step-response settling-metric refinement vs PIDscope: shape
   character matches PIDtoolbox after the three fixes in `d6781fc`
   but amplitude still inflated. **2026-05-17 follow-up:** Brian got

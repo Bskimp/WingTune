@@ -136,8 +136,7 @@ Six wing-specific modules plus a shared foundation:
 
 - **Vue 3 + Vite**, aligning with BF Configurator's active Vue 3 migration.
 - **Pinia** for state management, `shallowRef` for typed-array log data.
-- **uPlot** for the main scrubbable time-series view.
-- **Plotly.js** for analysis plots.
+- **uPlot** for all charts — scrubbable time-series view AND analysis plots. The early roadmap considered Plotly.js for analysis-plot interactivity, but uPlot scaled to cover both surfaces (M2-M7 panels, Spectrum, Step, TPA scatter, SPA overlay, etc.) and Plotly never made it into the bundle.
 - **Event/annotation track**: flight mode transitions, arm/disarm, RX loss, failsafe events, and any other discrete-event signals render as vertical flags on the timeline. Hover for label + timestamp. Sourced from the log's event frame stream (`blackbox-log` already exposes these).
 - **CLI output panel** — gated by confidence score. Green renders copy button; yellow renders with caveat banner; red shows analysis only.
 - **Per-module prerequisites view** — each recommendation module includes a "to gather data for this analysis, do X" panel showing required `debug_mode`, flight pattern, and data quality signals.
@@ -249,7 +248,7 @@ Pre/post-TPA S-term overlay from `debug_mode = S_TERM` logs.
 | **Web demo target** | **Static Vite build of the same code** | **"Try it" share URL without making users install anything; runs entirely client-side** |
 | Component library | TBD — plain Vue SFCs + Tailwind to start | Defer until Configurator's conventions stabilize |
 | Time-series plot | uPlot | Framework-agnostic, fast scrubbing on 100k+ samples |
-| Analysis plots | Plotly.js | Interactive zoom/pan |
+| Analysis plots | uPlot (Plotly.js retired) | uPlot scaled to cover analysis surfaces too; no Plotly dep in the bundle |
 | FFT | `fft.js` | Pure JS, no extra WASM module |
 | Curve fitting | `ml-levenberg-marquardt` or hand-rolled NLS | Small, JS-native |
 | Confidence framework | Structured `{ recommendation, confidence, criteria_met, criteria_failed }` per module | Forces explicit criteria-based scoring |
