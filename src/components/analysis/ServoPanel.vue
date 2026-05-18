@@ -331,15 +331,19 @@ const allTraces = computed<LogChannelTrace[]>(() => {
   return out;
 });
 
-/** Per-log aligned time: `log.time[i] + log.timeOffsetSec`. Returns
- *  the original Float32Array when offset is 0 (the typical case) so
- *  we share storage instead of allocating. When offset != 0 we use
- *  Float64 — Float32 round-trip otherwise introduces ~1e-8 epsilons
- *  that flip the sign of edge-sample bounds checks in
- *  `resampleOntoRef`, which at certain offsets cascades into uPlot
- *  rendering an empty y-axis (no valid samples to auto-scale to). */
-function alignedTimeFor(log: LogState): Float32Array | Float64Array {
-  if (log.timeOffsetSec === 0) return log.time;
+/** Per-log aligned time as Float64: `log.time[i] + log.timeOffsetSec`.
+ *  ALWAYS allocates Float64, even at offset 0. Two reasons:
+ *  (1) Float32 round-trip otherwise introduces ~1e-8 epsilons that flip
+ *      edge-sample bounds checks in `resampleOntoRef`, dropping samples
+ *      and cascading into a blank uPlot chart at "round-number"
+ *      offsets like exactly −0.60 s.
+ *  (2) Mixing Float32 and Float64 typed arrays at the uPlot x-axis
+ *      boundary breaks uPlot's renderer when the type swaps mid-drag
+ *      (offset 0 → non-zero changes the typed-array constructor under
+ *      uPlot's feet, manifesting as a blank chart at negative offsets).
+ *  The extra allocation per render is fine — typical 150k-sample logs
+ *  cost ~1 MB each, GC handles it comfortably at drag rates. */
+function alignedTimeFor(log: LogState): Float64Array {
   const t = log.time;
   const off = log.timeOffsetSec;
   const out = new Float64Array(t.length);
@@ -349,37 +353,36 @@ function alignedTimeFor(log: LogState): Float32Array | Float64Array {
 
 /** Resample `valueArr` (indexed by `log.time`) onto session-time
  *  positions in `ref`. Uses uniform-rate index math for O(1) per
- *  sample. Out-of-range positions become NaN so uPlot skips them.
- *  Tolerates a half-sample eps on the t0/tLast bounds (Float32
- *  precision in `log.time` can place edge samples a few nanoseconds
- *  off their ideal value). */
+ *  sample. Out-of-range positions clamp to the nearest edge sample
+ *  rather than emitting NaN — uPlot's renderer mishandles series with
+ *  leading NaN when other series in the same chart have valid data at
+ *  index 0 (the chart blanks entirely, no y-axis labels). Clamping
+ *  produces a "flatline" extension at the log's boundaries, which is
+ *  benign for continuous PWM/servo traces; the actual log-bounded
+ *  region is still where the meaningful comparison happens. */
 function resampleOntoRef(
   log: LogState,
-  ref: Float32Array | Float64Array,
+  ref: Float64Array,
   valueArr: Float32Array,
 ): Float32Array {
   const localTime = log.time;
-  if (log.timeOffsetSec === 0 && (localTime as unknown) === (ref as unknown)) {
-    if (valueArr.length >= ref.length) return valueArr;
-    const out = new Float32Array(ref.length);
+  const out = new Float32Array(ref.length);
+  const N = localTime.length;
+  if (N === 0 || valueArr.length === 0) {
     out.fill(NaN);
-    for (let i = 0; i < valueArr.length; i++) out[i] = valueArr[i];
     return out;
   }
-  const out = new Float32Array(ref.length);
-  out.fill(NaN);
-  const N = localTime.length;
-  if (N === 0 || valueArr.length === 0) return out;
   const offset = log.timeOffsetSec;
   const t0 = localTime[0];
   const tLast = localTime[N - 1];
   const dt = (tLast - t0) / (N - 1);
-  if (!isFinite(dt) || dt <= 0) return out;
-  const eps = dt * 0.5;
+  if (!isFinite(dt) || dt <= 0) {
+    out.fill(NaN);
+    return out;
+  }
   const M = Math.min(valueArr.length, N);
   for (let i = 0; i < ref.length; i++) {
     const localT = ref[i] - offset;
-    if (localT < t0 - eps || localT > tLast + eps) continue;
     let idx = Math.round((localT - t0) / dt);
     if (idx < 0) idx = 0;
     else if (idx >= M) idx = M - 1;
@@ -388,11 +391,11 @@ function resampleOntoRef(
   return out;
 }
 
-/** Longest aligned time axis among visible logs. Used as the chart x
- *  (session time). Logs whose aligned range falls outside this window
- *  simply NaN out in `resampleOntoRef`. */
-const refTime = computed<Float32Array | Float64Array>(() => {
-  let best: Float32Array | Float64Array = new Float32Array(0);
+/** Longest aligned time axis among visible logs, as Float64. Used as
+ *  the chart x (session time). Logs whose aligned range falls outside
+ *  this window simply NaN out in `resampleOntoRef`. */
+const refTime = computed<Float64Array>(() => {
+  let best: Float64Array = new Float64Array(0);
   let bestLen = 0;
   for (const { log } of visibleEntries.value) {
     const aligned = alignedTimeFor(log);
@@ -401,7 +404,14 @@ const refTime = computed<Float32Array | Float64Array>(() => {
       best = aligned;
     }
   }
-  if (bestLen === 0) return activeLog.time.value;
+  if (bestLen === 0) {
+    // Fallback: convert active log's raw time to Float64 to keep
+    // refTime's type stable across all code paths.
+    const t = activeLog.time.value;
+    const out = new Float64Array(t.length);
+    for (let i = 0; i < t.length; i++) out[i] = t[i];
+    return out;
+  }
   return best;
 });
 
@@ -441,7 +451,20 @@ const opts = computed<Options>(() => {
     height: 320,
     legend: { show: false },
     scales: {
-      x: { time: false },
+      x: {
+        time: false,
+        // Force uPlot to refit the x-axis to the data's actual range
+        // every time setData lands. Without this, when refTime's range
+        // shifts under a chip drag (offset changes session-time start /
+        // end), uPlot keeps the stale x-scale and the chart visibly
+        // blanks (y-axis collapses because no data falls in the cached
+        // visible x window). Returning [dataMin, dataMax] is what
+        // uPlot would default to anyway — but routed through `range`
+        // it actually fires reliably on setData. User-initiated
+        // drag-zoom (cursor.drag.x) still works between data updates;
+        // each new data tick just snaps back to fit.
+        range: (_u, dataMin, dataMax) => [dataMin, dataMax],
+      },
       y: { auto: true },
     },
     cursor: {
