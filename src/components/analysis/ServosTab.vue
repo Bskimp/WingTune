@@ -1,14 +1,17 @@
 <script setup lang="ts">
 // Servos tab — ServoPanel (multi-trace + saturation strips +
-// classified role labels) plus an honest "what's coming" note for
-// the remaining classifier work.
+// classified role labels), InputChainPanel (M-Servo input-chain
+// lag breakdown), plus an honest "what's coming" note for the
+// remaining classifier work.
 
 import ServoPanel from '@/components/analysis/ServoPanel.vue';
+import InputChainPanel from '@/components/analysis/InputChainPanel.vue';
 </script>
 
 <template>
   <div class="flex flex-col gap-2.5">
     <ServoPanel />
+    <InputChainPanel />
 
     <div
       class="bg-bp-surface border border-bp-line-2 px-4 py-3 font-mono text-[10.5px] text-bp-ink-3 leading-relaxed"

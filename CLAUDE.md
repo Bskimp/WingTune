@@ -262,6 +262,28 @@ all deferred (need calibration flights with the right debug modes).
   tests pass) and `tpaCurveFit.ts`. `NelderMeadOptions.initialStep`
   accepts `number | readonly number[]` so per-axis absolute steps
   can handle params with wildly different scales (e.g. ms vs %).
+- M-Servo MVP — input-chain lag breakdown. `lib/inputChain.ts`
+  computes per-axis windowed normalized cross-correlation across
+  three measurable stages: A `rcCommand → setpoint` (rate curves),
+  B `setpoint → servo_agg` (PID + mixer), C `servo_agg → gyro`
+  (servo + mechanical + aero). `buildPerAxisServoAggregate` sign-
+  aligns opposite-sign servos and includes both `servo[i]` and
+  `motor[i]` channel families with `|dominantSigned| ≥ 0.25`
+  threshold so throttle PWM (often motor[0] on a pusher wing)
+  doesn't pollute the per-axis aggregate. `InputChainPanel.vue`
+  renders per-axis chain visualization (Roll/Pitch/Yaw rows with
+  stage chips colored by health + total Σ stamp). Embedded in the
+  Servos tab below `ServoPanel`. `lib/recommenders/inputChain.ts`
+  emits yellow-confidence diagnostic recs per axis when total lag
+  clears the wing threshold AND one stage accounts for ≥50% of
+  total (otherwise no actionable lever); CLI deferred until multi-
+  flight calibration. Wing-tuned thresholds (stage A <5/15ms,
+  stages B+C <20/50ms, total <40/100ms) marked TODO for
+  recalibration after the corpus grows. Three follow-up slices
+  intentionally deferred per `project-mservo-deferred-slices`
+  memory: per-servo drill-down (asymmetric linkage), airspeed-
+  loaded lag bins (requires DEBUG_TPA flight), deadband + slew-
+  ceiling detection (better as bench-test workflow).
 
 **In flight / pending:**
 
@@ -364,15 +386,16 @@ all deferred (need calibration flights with the right debug modes).
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** Brian's call. The
-wing analytics suite is complete and the real Rust scan-progress
-callback shipped (commit `9759d0c`). The one remaining concrete
-code item that isn't flight-blocked or held-on-Brian is M1.7
-multi-log compare (~1 week, reduced scope — see pending list).
-Everything else either needs flight data, is held on Brian's call
-(upstream PR), or is a polish lift. The chart + cursor +
-recommender + capability infrastructure is well-trodden — adding
-a new analytics module follows the established pattern.
+**Immediate next step when resuming code work:** M1.7 multi-log
+compare. With M-Servo MVP shipped, M1.7 is now the only remaining
+concrete code item that isn't flight-blocked or held-on-Brian.
+Scope reduced (~1 week, no persistence, no MSP/live-FC). Design
+pass + slice plan should land before implementation — see the
+M1.7 section in `docs/wingtune-m1-execution.md`. Everything else
+either needs flight data, is held on Brian's call (upstream PR),
+or is a polish lift. The chart + cursor + recommender +
+capability infrastructure is well-trodden — adding a new
+analytics module follows the established pattern.
 
 ## Cardinal rules
 
