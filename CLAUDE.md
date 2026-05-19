@@ -488,6 +488,77 @@ bearing design decisions.
       path that was previously without a codified skill. See the
       CLAUDE.md skills index for trigger conditions.
 
+- **2026-05-18 evening session — step + autoalign + servo
+  asymmetry (commits 432bdb9..56b13a1).** Closeout of four
+  discretionary slices triggered by Brian's first real-flight
+  USE_WING logs (btfl_002 / btfl_003 / btfl_005, added to
+  private corpus). High-level:
+    · **Cleanups (432bdb9, 5daba86, dceab1f, 1c8ee6d):**
+      debugMode rec uses `allBlocked` instead of `anyBlocked`
+      so per-axis specs only fire when truly all axes blocked
+      (S_TERM yaw-only block no longer triggers misleading rec
+      on USE_WING). TpaCurvePanel bounded y-scale + fit-
+      trustworthiness gate (rejects fits with params outside
+      CLI valid ranges, suppresses garbage curve overlay, warn
+      ribbon explains narrow-X-range cause). STermPanel routes
+      TPA factor through direct `wingTpaFactor` signal instead
+      of deriving from post/pre (continuous, no derivation
+      noise) with hold-last fallback for non-USE_WING. Vitest
+      pool=forks pinned (default threads pool leaks state).
+    · **Plan D — step-response metric (0995235):** peak now
+      `max(response within first 400 ms)` not global max;
+      `settlingTimeMs` → `latencyMs` (first 0.5 crossing,
+      PIDscope-aligned, wing-scaled per CLAUDE.md SCOPE box).
+      Yellow caveat ribbon stamps the panel when axisF or axisS
+      is non-zero (USE_WING logs always trigger it — explains
+      "non-zero F+S, full closed-loop, not PD-isolated"). Per-
+      tab guide footer points at the F=0+S=0 calibration sortie
+      workflow for PIDtoolbox/PIDscope comparability.
+    · **Plan A — auto-align first-throttle fallback (c1c5051):**
+      new `lib/firstArmEvent.ts` detects first sample where
+      `rcCommand[3]` crosses 1100 from below. LogRoster
+      orchestrator: gyro xcorr primary, throttle fallback when
+      xcorr returns low NCC or peak ratio. Per-log anchor
+      method ("gyro xcorr (ncc 0.82)" / "first-throttle
+      fallback" / "gyro low-conf → throttle fallback") surfaces
+      in the offset-badge tooltip. Resolved Brian's +21.40s
+      xcorr outlier on btfl_003 to a sensible -0.67s.
+    · **Plan B — M-Servo asymmetric linkage detection (56b13a1):**
+      `lib/servoAsymmetry.ts` does pairwise lag + amplitude-ratio
+      analysis for axes with ≥ 2 contributing servos. New
+      `ServoAsymmetryPanel` embedded under InputChainPanel in
+      Servos tab. Yellow recs for warn-severity pairs (no CLI —
+      mechanical drift has no firmware fix; detail walks the
+      bench-inspection workflow). Footer caveat surfaced: BF
+      wing-msp sends paired-identical PWM so this panel can only
+      detect mixer-side drift — mechanical asymmetry (loose
+      linkage, worn clevis, asymmetric deflection) requires a
+      bench deflection gauge.
+    · **Plan C — no work needed.** Audit of compare panels
+      (Servo, Tracking, PID, SPA, S-Term, Airspeed) confirmed
+      ALL of them already use `useSessionRefTime` +
+      `resampleOntoRef` + `sessionTimeRangeFn` from M1.7.1. Only
+      Spectrum + Step intentionally stay on freq / impulse-
+      relative axes. Saved the planned ~2h estimate.
+    · **M4 raw-gyro overlay status reset:** SpectrumPanel raw/
+      filt comparison was previously marked flight-blocked on
+      `debug_mode = GYRO_RAW`, but signalRegistry already
+      routes `raw_gyro` through main-frame `gyroUnfilt[axis]`
+      first (with the debug-mode fallback for stock-BF). So
+      USE_WING logs exercise raw/filt overlay end-to-end with
+      no debug-mode requirement. Pure status correction.
+    · **Per-tab tuning guide doc** added at
+      `docs/wingtune-tab-guide.md` — what each tab shows, what
+      to look for, tuning workflow, gotchas. New-contributor
+      onboarding + workflow reference.
+    · **178/178 unit tests pass** (14 new this session — 8 for
+      firstArmEvent + 6 for servoAsymmetry).
+    · **Corpus state:** private manifest now has 7 entries —
+      the original 4 limonspb PR #13895 logs plus Brian's 3
+      real-flight USE_WING logs (basic-wing class). All
+      validate cleanly via `npm run corpus:validate:private`.
+      See [[project-corpus-pull-state]] memory.
+
 **In flight / pending:**
 
 - **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
@@ -505,83 +576,35 @@ bearing design decisions.
   fields make these debug modes unnecessary for analytics —
   the registry routes through main-frame first. So in practice
   any USE_WING log with motion exercises both.)
-- **M4 raw-gyro overlay still held** on a `debug_mode = GYRO_RAW`
-  flight (no main-frame fallback for the unfiltered gyro
-  alongside the standard filtered gyro).
-- Step-response settling-metric refinement vs PIDscope: shape
-  character matches PIDtoolbox after the three fixes in `d6781fc`
-  but amplitude still inflated. **2026-05-17 follow-up:** Brian got
-  PIDscope working locally and did a three-tool side-by-side on
-  btfl_002 (PIDscope / PIDtoolbox / WingTune). Findings:
-    · Reference tools both report Roll Peak ≈ 1.3 (with latencies
-      ~11–18 ms) despite their displayed CURVES looking very
-      different. PIDscope's roll curve visually clips at the
-      y-max of 1.75 (so the actual visible peak is > 1.75) while
-      reporting Peak = 1.3 in the metric box. **So the "peak"
-      metric both reference tools report is NOT max(response).**
-    · WingTune's `peakAmplitude = max(response)` is reporting a
-      fundamentally different quantity (335% on this log) — we've
-      been comparing apples to oranges across all the previous
-      calibration work.
-    · PIDscope keeping n=9 segments with a clean curve while
-      WingTune's n=13 produces noisy oscillation tells us the
-      averaging / normalisation differs too — segment count
-      alone isn't the culprit.
-  PIDscope source is GPL-3 and lives locally at
-  `C:\Users\Sista\Desktop\PIDscope-main`. Metric formulas
-  extracted via research agent against that local copy
-  (`src/plot/PStuningParams.m:74-76` + `:149-151`):
-
-  ```
-  peak    = max(mean_response WITHIN first 150 ms after t=0)
-            # NOT global max — the chart shows 0-500 ms but the
-            # metric only sees the first 150 ms. That's why
-            # PIDscope's curve can visually clip at 1.75 while
-            # reporting Peak = 1.3 in the metric box.
-  latency = time when mean_response first crosses 0.5
-            # from t=0 of the impulse (50% of unit-step target,
-            # not 50% of realized peak).
-  ```
-
-  **Critical quad-vs-wing caveat:** the 150 ms peak window is
-  hardcoded for quad dynamics (~30-80 ms settling). Wings have
-  200-500 ms response, so adopting the formula verbatim would
-  report the early *rising shoulder* as "peak" rather than the
-  actual overshoot. A wing-scaled window would be ~500-800 ms,
-  OR derive from the response's own settling time.
-
-  **Decision: held — gather more data before changing the metric.**
-  Brian wants to run multiple newer logs back-to-back through
-  PIDscope + PIDtoolbox + Blackbox Log Explorer + WingTune and
-  compare side-by-side before committing to a metric definition
-  change. One log + three tools is too thin to choose a window
-  size that holds across the wing-tuning regime. Knobs still on
-  the dial list — QC band `[0.7, 1.5]`, segmentLen 8192 (2 s @
-  4 kHz), peak gate 80 deg/s — remain secondary.
-
-  Proposed implementation when ready (~30 min):
-    · Replace `peakAmplitude = max(response)` with
-      `max(response[0..PEAK_WINDOW_SAMPLES])`, default
-      `PEAK_WINDOW_MS = 400` (middle of wing-response range).
-    · Replace `settlingTimeMs` (first cross of 0.95 × finalValue)
-      with `latencyMs = first time response[i] > 0.5`; gate
-      with `max(response within window) < 0.5 → NaN`.
-    · Update StepResponsePanel header label `settle 95%` →
-      `latency 50%`. Cross-check expected: btfl_002 should drop
-      from peak 335% toward 1.3-2.0 range.
-- M1.0 corpus assembly track (not started).
-- Optional alignment heuristics (first-arm event, first-mode-change,
-  GPS time sync, cross-correlation) for `session.setTimeOffset`
-  auto-suggestion. All time-domain panels are already session-time
-  + per-log resampled, so adding auto-align is purely a "compute
-  offset and call `session.setTimeOffset(id, offset)`" surface —
-  no chart-side work. Simplest first slice (~30 min): walk
-  `flightModeFlags` or `rcCommand[3]` per log, find first armed /
-  first throttle-up sample, set offsets so all logs share session
-  t=0 at that event. Add an "auto-align" button on the LogRoster.
-  Manual drag handle stays as the override for when detection
-  fails or the user wants a different anchor.
+- ~~M4 raw-gyro overlay flight-blocked~~ — **resolved 2026-05-18**.
+  USE_WING firmware always logs main-frame `gyroUnfilt[axis]`
+  alongside filtered `gyroADC[axis]`, so SpectrumPanel's raw/filt
+  overlay no longer needs `debug_mode = GYRO_RAW`. signalRegistry
+  routes `raw_gyro` through main-frame first, falls back to
+  DEBUG_GYRO_RAW for stock-BF logs.
+- Step-response amplitude calibration vs PIDscope — **metric
+  definition shipped 0995235** (peak = max within first 400 ms;
+  latency = first 0.5 crossing — both PIDscope-aligned, wing-
+  scaled). Plus F/S caveat stamp on the panel explaining
+  closed-loop-as-flown vs PD-isolated reading. What remains:
+  threshold recalibration (when does peak indicate a tuning
+  issue?) needs a clean PD-isolated reference flight to anchor
+  against. Held until Brian flies F=0 + S=0 calibration sortie. Metric definition + caveat
+  shipped in commit 0995235 (see entry above). The remaining
+  question — "where do we set the YELLOW/RED thresholds on peak
+  amplitude for actionable rec emission?" — needs Brian to fly
+  a F=0+S=0 PD-isolated calibration sortie. Until then the
+  Step panel is diagnostic-only; no Step-driven CLI recs ship.
+- ~~Optional alignment heuristics~~ — **first-throttle-up
+  fallback shipped c1c5051** (Plan A from the 2026-05-18 evening
+  session). LogRoster auto-align now uses gyro xcorr as primary,
+  falls back to first-throttle-up crossing when xcorr returns
+  low NCC / peak ratio. Per-log anchor method surfaces in the
+  offset-badge tooltip. Resolved the +21.40s xcorr outlier on
+  Brian's btfl_003 to a sensible -0.67s.
 - Upstream `blackbox-log` PR (held by Brian).
+- Upstream firmware writer-order fix PR (held by Brian — fix
+  is in his `betaflight-wing-msp` fork as `eeafdb052`).
 
 **Explicitly out of scope (won't build):**
 - **Live FC connection / MSP / serial.** WingTune is a log analyzer,
@@ -592,18 +615,18 @@ bearing design decisions.
   link from WingTune.
 
 **Immediate next step when resuming code work:** nothing in the
-code queue is unblocked. M1.7.1 time-alignment shipped 2026-05-18
-(drag handle in LogRoster + ServoPanel session-time adoption +
-Float32→Float64 precision fix in the aligned-time axis; 140/140
-unit tests green, typecheck clean). Remaining work is either
-flight-blocked (M3/M4/M5/M6/M7 visual validation needs
-calibration sorties with the right debug modes), held on Brian's
-call (upstream `blackbox-log` PR), or held on PIDscope side-by-
-side (step-response amplitude calibration). Discretionary code
-slice if someone wants it: migrate Spectrum / Step /
-PIDContribution / Tracking onto session-time x-axes the same
-way ServoPanel was migrated (only matters once a non-zero
-active-log offset becomes a real workflow signal).
+queue is genuinely unblocked. The 2026-05-18 evening session
+(commits 432bdb9..56b13a1) closed out four discretionary slices
+(D step-response metric realignment, A first-throttle auto-align
+fallback, B M-Servo asymmetric linkage detection; C was already
+done in M1.7.1). 178/178 unit tests pass, typecheck clean. Per-
+tab tuning guide doc lives at `docs/wingtune-tab-guide.md` for
+new-contributor onboarding + workflow reference. Remaining work
+is flight-blocked (recommender threshold recalibration needs a
+clean PD-isolated reference flight; M3/M5/M6/M7 visual
+validation needs throttle-varying cruise + the right debug
+modes for stock-BF logs) or held on Brian's call (upstream
+`blackbox-log` PR, upstream firmware writer-order PR).
 
 ## Cardinal rules
 
