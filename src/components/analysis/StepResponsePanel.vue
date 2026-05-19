@@ -15,10 +15,24 @@
 //
 // Reference line at y=1.0 = perfect tracking (the plane responds
 // instantly to the commanded setpoint and holds). Real responses ramp
-// up to 1.0 (sluggish) or overshoot above (aggressive PID). Settling
-// time = first crossing of 0.95·finalValue. Peak amplitude > 1.0 →
-// overshoot indicator. numSegments = how many manoeuvre windows
-// passed the setpoint-RMS gate.
+// up to 1.0 (sluggish) or overshoot above (aggressive PID).
+//
+// Metrics (PIDscope-aligned, wing-scaled — see lib/stepResponse.ts):
+// · peak = max(response within first 400 ms after t=0). NOT global
+//   max. PIDscope uses 150 ms for quads; wing closed-loop is 200-500
+//   ms so 400 ms captures actual overshoot, not the rising shoulder.
+// · latency = first time response crosses 0.5 (50% of unit-step ideal).
+//   NaN when response never reaches 0.5 within the peak window.
+// · numSegments = how many manoeuvre windows passed the setpoint-peak
+//   gate (50 deg/s).
+//
+// FF / S caveat: this panel measures FULL closed-loop response as
+// flown — P/I/D/F/S all contributing. For PIDtoolbox/PIDscope
+// PD-isolation workflow comparability, F and S gains must be zeroed
+// in BF before flight. A yellow caveat stamp surfaces when the
+// selected axis has non-zero axisF or axisS in the log so the user
+// knows whether they're looking at a PD-isolated curve or a real
+// flying-config response.
 
 import { computed, ref, watch, watchEffect } from 'vue';
 import type { AlignedData, Options, Series } from 'uplot';
@@ -303,10 +317,39 @@ const pendingMessage = computed(() => {
   return 'computing step response…';
 });
 
-const settlingText = computed(() => {
+const latencyText = computed(() => {
   const r = firstResult.value;
-  if (!r || r.settlingTimeMs < 0) return '—';
-  return `${r.settlingTimeMs.toFixed(0)} ms`;
+  if (!r || !Number.isFinite(r.latencyMs)) return '—';
+  return `${r.latencyMs.toFixed(0)} ms`;
+});
+
+/** Detect non-zero F/S contribution on the selected axis from scan-time
+ *  sample_check magnitudes. Avoids hydrating the axisF/axisS arrays
+ *  just to answer "are these terms active?" — the M1.7.2 value_min /
+ *  value_max metadata answers it directly. Threshold of 1.0 (deg/s
+ *  equivalent) dodges noise floor while catching any real contribution. */
+const ffsActive = computed<{ f: boolean; s: boolean }>(() => {
+  const first = visibleEntries.value[0];
+  if (!first) return { f: false, s: false };
+  const cap = first.log.scanReport?.capability;
+  if (!cap?.sample_check) return { f: false, s: false };
+  const axis = selectedAxis.value;
+  const fCheck = cap.sample_check[`axisF[${axis}]`];
+  const sCheck = cap.sample_check[`axisS[${axis}]`];
+  const magnitude = (sc: { value_min: number | null; value_max: number | null } | undefined) => {
+    if (!sc) return 0;
+    return Math.max(Math.abs(sc.value_min ?? 0), Math.abs(sc.value_max ?? 0));
+  };
+  return { f: magnitude(fCheck) > 1.0, s: magnitude(sCheck) > 1.0 };
+});
+
+const ffsCaveatText = computed<string | null>(() => {
+  const { f, s } = ffsActive.value;
+  if (!f && !s) return null;
+  const terms: string[] = [];
+  if (f) terms.push('F');
+  if (s) terms.push('S');
+  return `non-zero ${terms.join('+')} — full closed-loop response, not PD-isolated`;
 });
 
 const peakPctText = computed(() => {
@@ -355,8 +398,8 @@ const peakToneClass = computed(() => {
             <div class="font-mono text-[13px]" :class="peakToneClass">{{ peakPctText }}</div>
           </div>
           <div class="text-right">
-            <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">settle 95%</div>
-            <div class="font-mono text-[13px] text-bp-ink">{{ settlingText }}</div>
+            <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">latency 50%</div>
+            <div class="font-mono text-[13px] text-bp-ink">{{ latencyText }}</div>
           </div>
         </div>
 
@@ -393,6 +436,13 @@ const peakToneClass = computed(() => {
         class="absolute inset-0 flex flex-col items-center justify-center font-mono text-[11px] text-bp-ink-3 text-center px-6"
       >
         {{ pendingMessage }}
+      </div>
+      <div
+        v-else-if="ffsCaveatText"
+        class="absolute top-1 right-3 z-10 px-2 py-1 bg-bp-surface-2 border border-bp-warn/40 font-mono text-[10.5px] text-bp-warn leading-tight"
+        title="For PIDtoolbox/PIDscope-style PD-isolation tuning, zero F and S gains in BF before the calibration flight."
+      >
+        {{ ffsCaveatText }}
       </div>
       <div ref="hostRef" class="w-full" />
     </div>

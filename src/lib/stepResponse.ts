@@ -28,6 +28,20 @@ import { fftInPlace, hannWindow } from '@/lib/spectrum';
 const DEFAULT_SEGMENT_LEN = 2048;
 const DEFAULT_OVERLAP = 0.5;
 const DEFAULT_WINDOW_SEC = 0.5;
+/** Peak-amplitude search window. PIDscope's `PSstepcalc.m` reports
+ *  `peak = max(response within first 150 ms after t=0)` — NOT global
+ *  max. The 150 ms window is quad-tuned (quad settling ~30-80 ms);
+ *  for wings (200-500 ms closed-loop response per CLAUDE.md SCOPE
+ *  box), the right window scales to ~400 ms — captures actual
+ *  overshoot, not the rising shoulder of a still-developing response.
+ *  See `peakWithinWindow` for the cardinal-rule wing-scaled value. */
+const DEFAULT_PEAK_WINDOW_MS = 400;
+/** Latency target: time at which response first crosses 0.5 (50% of
+ *  unit-step ideal). Matches PIDscope's metric — and is the natural
+ *  "how long until controller responds at all" measure independent of
+ *  whether the response overshoots or settles eventually. NaN when the
+ *  response never crosses 0.5 within the peak window (gate condition). */
+const LATENCY_THRESHOLD = 0.5;
 /** Setpoint segments whose peak |value| (deg/s) doesn't clear this gate
  *  are dropped — no real step occurred in the window, deconvolving
  *  against cruise trim noise just smears the average. PIDscope uses 20
@@ -62,14 +76,20 @@ export interface StepResponseResult {
    *  response. Zero means no window in the flight had a real step
    *  AND a clean deconvolution — fly more aggressive manoeuvres. */
   numSegments: number;
-  /** Peak amplitude reached during the window (proxy for overshoot
-   *  if > 1.0). */
+  /** Peak amplitude reached WITHIN the first DEFAULT_PEAK_WINDOW_MS
+   *  (wing-scaled to 400 ms — NOT global max). 1.0 = ideal step
+   *  tracking; > 1.0 = overshoot; < 1.0 = sluggish or never reached
+   *  setpoint within the window. Matches PIDscope's metric framing
+   *  with the wing-physics window adjustment. */
   peakAmplitude: number;
-  /** Time at which `peakAmplitude` occurred, in milliseconds. */
+  /** Time at which `peakAmplitude` occurred (within the peak window),
+   *  in milliseconds. */
   peakTimeMs: number;
-  /** Time to first reach 95% of the steady-state value, in
-   *  milliseconds. -1 if the response never reaches 95%. */
-  settlingTimeMs: number;
+  /** Time to first cross 0.5 (50% of unit-step ideal), in
+   *  milliseconds. PIDscope's latency metric. NaN if the response
+   *  never crosses 0.5 within the peak window — fly more aggressive
+   *  inputs (typically a sluggish/under-gained controller). */
+  latencyMs: number;
   /** Mean of the response over the last ~10% of the window — the
    *  practical "final value" estimate. */
   finalValue: number;
@@ -107,6 +127,10 @@ export interface ComputeStepResponseOptions {
   overlap?: number;
   windowSec?: number;
   setpointPeakThreshold?: number;
+  /** Override peak-search window (ms). Defaults to DEFAULT_PEAK_WINDOW_MS
+   *  (400 ms — wing-scaled per CLAUDE.md SCOPE box). Tests use shorter
+   *  windows for synthetic responses. */
+  peakWindowMs?: number;
 }
 
 export function computeStepResponse(
@@ -131,7 +155,7 @@ export function computeStepResponse(
 
   const empty = (): StepResponseResult => ({
     time, response, numSegments: 0,
-    peakAmplitude: 0, peakTimeMs: 0, settlingTimeMs: -1, finalValue: 0,
+    peakAmplitude: 0, peakTimeMs: 0, latencyMs: NaN, finalValue: 0,
   });
 
   if (setpoint.length !== gyro.length) {
@@ -225,30 +249,38 @@ export function computeStepResponse(
     response[i] = accumStep[i] * invNum;
   }
 
-  // Metrics.
+  // Metrics — peak constrained to first PEAK_WINDOW_MS samples per
+  // PIDscope's PSstepcalc.m convention (wing-scaled). Capping at
+  // windowSamples for synthetic tests with shorter total windows.
+  const peakWindowMs = options.peakWindowMs ?? DEFAULT_PEAK_WINDOW_MS;
+  const peakWindowSamples = Math.min(
+    windowSamples,
+    Math.max(1, Math.round((peakWindowMs / 1000) * sampleRateHz)),
+  );
   let peakAmplitude = -Infinity;
   let peakIdx = 0;
-  for (let i = 0; i < windowSamples; i++) {
+  for (let i = 0; i < peakWindowSamples; i++) {
     if (response[i] > peakAmplitude) {
       peakAmplitude = response[i];
       peakIdx = i;
     }
   }
   // Final-value: average over last 10% of window (tailStart computed
-  // earlier so per-segment QC could use the same window).
+  // earlier so per-segment QC could use the same window). Not gated by
+  // peak window — final-value uses the full settled tail.
   let tailSum = 0;
   for (let i = tailStart; i < windowSamples; i++) tailSum += response[i];
   const finalValue = tailSum / Math.max(1, tailLen);
 
-  // Settling: first time the response stays within 95-105% of finalValue
-  // for the rest of the window. Simpler approximation: first crossing
-  // of 0.95 × finalValue.
-  let settlingTimeMs = -1;
-  if (finalValue > 0) {
-    const target = 0.95 * finalValue;
-    for (let i = 0; i < windowSamples; i++) {
-      if (response[i] >= target) {
-        settlingTimeMs = (i / sampleRateHz) * 1000;
+  // Latency: first time response crosses 0.5 (50% of unit-step ideal)
+  // within the peak window. NaN gate when response never crosses 0.5
+  // — typically a sluggish/under-gained controller that needs more
+  // aggressive inputs to characterise.
+  let latencyMs = NaN;
+  if (peakAmplitude >= LATENCY_THRESHOLD) {
+    for (let i = 0; i < peakWindowSamples; i++) {
+      if (response[i] >= LATENCY_THRESHOLD) {
+        latencyMs = (i / sampleRateHz) * 1000;
         break;
       }
     }
@@ -260,7 +292,7 @@ export function computeStepResponse(
     numSegments,
     peakAmplitude,
     peakTimeMs: (peakIdx / sampleRateHz) * 1000,
-    settlingTimeMs,
+    latencyMs,
     finalValue,
   };
 }

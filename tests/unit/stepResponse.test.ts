@@ -74,10 +74,10 @@ describe('computeStepResponse', () => {
     ).toThrow(/power of 2/);
   });
 
-  test('recovers settling shape of a synthetic first-order system', () => {
+  test('recovers shape + latency of a synthetic first-order system', () => {
     const sr = 1000;
     const n = 8192;
-    const tauSec = 0.08; // 80 ms time constant — settles ~95% by 240 ms
+    const tauSec = 0.08; // 80 ms time constant
     // Setpoint with rich spectral content (square wave) so deconvolution
     // has enough excitation.
     const setpoint = new Float32Array(n);
@@ -91,14 +91,20 @@ describe('computeStepResponse', () => {
       segmentLen: 1024,
       windowSec: 0.3,
       setpointPeakThreshold: 10,
+      peakWindowMs: 300,
     });
     expect(r.numSegments).toBeGreaterThan(0);
     // Final value should be near 1.0 for a perfect first-order tracker.
     expect(r.finalValue).toBeGreaterThan(0.7);
     expect(r.finalValue).toBeLessThan(1.4);
-    // Settling time should be roughly 3·tau (~240 ms) for 95%.
-    expect(r.settlingTimeMs).toBeGreaterThan(50);
-    expect(r.settlingTimeMs).toBeLessThan(300);
+    // Peak (within 300 ms window) should be around 1.0 — no overshoot
+    // on a clean 1st-order system, just asymptotic approach.
+    expect(r.peakAmplitude).toBeGreaterThan(0.7);
+    expect(r.peakAmplitude).toBeLessThan(1.4);
+    // Latency to 0.5 for 1st-order: t = tau · ln(2) ≈ 55 ms. Wide
+    // tolerance for Wiener deconvolution noise.
+    expect(r.latencyMs).toBeGreaterThan(30);
+    expect(r.latencyMs).toBeLessThan(100);
   });
 
   test('all-quiet setpoint produces zero segments', () => {
