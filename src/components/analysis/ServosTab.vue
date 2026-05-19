@@ -6,12 +6,14 @@
 
 import ServoPanel from '@/components/analysis/ServoPanel.vue';
 import InputChainPanel from '@/components/analysis/InputChainPanel.vue';
+import ServoAsymmetryPanel from '@/components/analysis/ServoAsymmetryPanel.vue';
 </script>
 
 <template>
   <div class="flex flex-col gap-2.5">
     <ServoPanel />
     <InputChainPanel />
+    <ServoAsymmetryPanel />
 
     <div
       class="bg-bp-surface border border-bp-line-2 px-4 py-3 font-mono text-[10.5px] text-bp-ink-3 leading-relaxed"
