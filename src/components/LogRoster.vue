@@ -22,6 +22,7 @@ import {
   LOG_FAMILIES,
 } from '@/lib/logColors';
 import { alignLogToReference } from '@/lib/autoAlign';
+import { alignByFirstThrottle } from '@/lib/firstArmEvent';
 import IconX from '@/components/icons/IconX.vue';
 
 const session = useSessionStore();
@@ -202,10 +203,17 @@ function setStatus(msg: string | null, ms = 4500) {
   }
 }
 
+/** Per-log anchor methods + confidence — surfaced on the chip tooltip
+ *  so users can see which method aligned which log. Map from logId to
+ *  the human-readable anchor description (e.g. "gyro xcorr (ncc 0.82)"
+ *  or "first-throttle fallback"). Cleared on next auto-align run. */
+const anchorByLogId = ref<Map<string, string>>(new Map());
+
 async function onAutoAlign() {
   if (isAligning.value || !canAutoAlign.value) return;
   isAligning.value = true;
   setStatus(null);
+  anchorByLogId.value = new Map();
   // Yield once so the "aligning…" label paints before the correlation
   // runs synchronously (~50-150 ms per pair on typical 150k-sample logs).
   await new Promise<void>((r) => setTimeout(r, 0));
@@ -214,24 +222,60 @@ async function onAutoAlign() {
     const refLog = session.logs.get(vis[0].id);
     if (!refLog) return;
     const refOffset = refLog.timeOffsetSec;
-    let aligned = 0;
+    const nextAnchors = new Map<string, string>();
+    let alignedXcorr = 0;
+    let alignedFallback = 0;
     let skipped = 0;
     let lowConfidence = 0;
+
     for (let i = 1; i < vis.length; i++) {
       const otherLog = session.logs.get(vis[i].id);
       if (!otherLog) continue;
-      const result = alignLogToReference(refLog, otherLog);
-      if (result.signal === 'none') {
-        skipped += 1;
+
+      // Primary: gyro cross-correlation.
+      const xcorr = alignLogToReference(refLog, otherLog);
+      const xcorrUsable = xcorr.signal === 'gyro';
+      const xcorrConfident = xcorrUsable && xcorr.ncc >= 0.4 && xcorr.peakRatio >= 1.5;
+
+      // Fallback: first-throttle-up. Tried whenever xcorr is missing OR
+      // low-confidence — gives the user a second-opinion anchor that
+      // doesn't depend on shared motion content.
+      if (xcorrConfident) {
+        session.setTimeOffset(otherLog.id, refOffset + xcorr.offsetSec);
+        alignedXcorr += 1;
+        nextAnchors.set(otherLog.id, `gyro xcorr (ncc ${xcorr.ncc.toFixed(2)})`);
         continue;
       }
-      session.setTimeOffset(otherLog.id, refOffset + result.offsetSec);
-      aligned += 1;
-      if (result.ncc < 0.4 || result.peakRatio < 1.5) lowConfidence += 1;
+
+      const throttle = alignByFirstThrottle(refLog, otherLog);
+      if (throttle.signal === 'throttle') {
+        session.setTimeOffset(otherLog.id, refOffset + throttle.offsetSec);
+        alignedFallback += 1;
+        const why = xcorrUsable ? 'gyro low-conf → throttle fallback' : 'first-throttle fallback';
+        nextAnchors.set(otherLog.id, why);
+        continue;
+      }
+
+      // Neither method worked. If xcorr was usable but low-confidence,
+      // still apply it + count as low-conf (best we have).
+      if (xcorrUsable) {
+        session.setTimeOffset(otherLog.id, refOffset + xcorr.offsetSec);
+        alignedXcorr += 1;
+        lowConfidence += 1;
+        nextAnchors.set(otherLog.id, `gyro xcorr LOW conf (ncc ${xcorr.ncc.toFixed(2)})`);
+        continue;
+      }
+
+      skipped += 1;
+      nextAnchors.set(otherLog.id, 'no anchor (no gyro + no throttle event)');
     }
+
+    anchorByLogId.value = nextAnchors;
+
     const parts: string[] = [];
-    parts.push(`aligned ${aligned}`);
-    if (skipped > 0) parts.push(`${skipped} skipped (no gyro)`);
+    parts.push(`aligned ${alignedXcorr + alignedFallback}`);
+    if (alignedFallback > 0) parts.push(`${alignedFallback} via throttle fallback`);
+    if (skipped > 0) parts.push(`${skipped} skipped`);
     if (lowConfidence > 0) parts.push(`${lowConfidence} low conf`);
     setStatus(parts.join(' · '));
   } finally {
@@ -319,7 +363,7 @@ onUnmounted(() => {
       <span
         v-if="entry.offsetSec !== 0"
         class="font-mono text-[9.5px] text-bp-accent tabular-nums"
-        :title="`Time offset: ${formatOffset(entry.offsetSec)} · projected onto the session time axis as t + offset`"
+        :title="(anchorByLogId.get(entry.id) ? `anchored via ${anchorByLogId.get(entry.id)} · ` : '') + `Time offset: ${formatOffset(entry.offsetSec)} · projected onto the session time axis as t + offset`"
       >
         {{ formatOffset(entry.offsetSec) }}
       </span>
