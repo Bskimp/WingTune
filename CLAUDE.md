@@ -697,6 +697,16 @@ serves as a built-in review checklist.
   Read for "what's the actual next step?" Includes critical path,
   sub-milestones M1.0 through M1.7, exit criteria, and TypeScript stubs for
   the load-bearing pieces.
+- `docs/wingtune-analytics-plan.md` — forward-looking plan for analytics
+  beyond M1-M7 + M-Servo. Triaged-with-Brian shortlist (M-FF feedforward
+  effectiveness + maneuver detection, M-Coupling cross-axis matrix,
+  M-Servo-2 hunt + transfer function, M-Pilot input style, craft
+  persistence infra). Records what was dropped + why. Read for "what's
+  the next milestone batch?"
+- `docs/wingtune-tab-guide.md` — per-tab walkthrough: what each panel
+  shows, how to read it, the tuning workflow that uses it.
+- `docs/wingtune-tuning-workflow.md` — 10-phase end-to-end tune from
+  fresh flash to validated wing, cross-referenced against the tab guide.
 
 M2's execution plan does not exist yet by design — it'll be written when
 M1.3 lands and the hydration API contract is real. Don't preemptively spec
