@@ -51,13 +51,18 @@ import {
   sessionTimeRangeFn,
   useSessionRefTime,
 } from '@/lib/sessionTime';
-import { detectSaturation, type SaturationResult } from '@/lib/servoAnalysis';
+import {
+  detectSaturation,
+  type SaturationConfig,
+  type SaturationResult,
+} from '@/lib/servoAnalysis';
 import { smoothTrace } from '@/lib/displaySmooth';
 import {
   classifyServos,
   ROLE_LABELS,
   type ClassifiedChannel,
 } from '@/lib/servoClassifier';
+import { parseServoConfig } from '@/lib/servoMixer';
 import {
   familyForIndex,
   tintTowardFamily,
@@ -212,12 +217,25 @@ const activeChannelArrays = computed<Float32Array[]>(() =>
   activeChannels.value.map((c) => fields.value.get(c.fieldName) ?? new Float32Array(0)),
 );
 
+// Decoded servo mixer + per-servo params from the BBL header (empty
+// on stock-BF logs that don't carry the smix/servoParam table).
+const servoConfig = computed(() => parseServoConfig(scanReport.value?.header_params));
+
 const saturationByChannel = computed<Map<string, SaturationResult>>(() => {
   const out = new Map<string, SaturationResult>();
+  const params = servoConfig.value.servoParams;
   activeChannels.value.forEach((c, i) => {
     const arr = activeChannelArrays.value[i];
     if (!arr || arr.length === 0) return;
-    out.set(c.fieldName, detectSaturation(arr));
+    // Use the channel's real PWM endpoints when the log carries the
+    // servoParam table; otherwise detectSaturation falls back to its
+    // 1000 / 2000 defaults.
+    let cfg: SaturationConfig | undefined;
+    if (c.kind === 'servo') {
+      const sp = params.find((p) => p.servoIndex === c.index);
+      if (sp) cfg = { minPwm: Math.min(sp.min, sp.max), maxPwm: Math.max(sp.min, sp.max) };
+    }
+    out.set(c.fieldName, detectSaturation(arr, cfg));
   });
   return out;
 });
@@ -236,6 +254,7 @@ const classifications = computed<Map<string, ClassifiedChannel>>(() => {
   const setpointPitch = fields.value.get('setpoint[1]') ?? new Float32Array(0);
   const setpointYaw   = fields.value.get('setpoint[2]') ?? new Float32Array(0);
   const results = classifyServos({
+    smixRules: servoConfig.value.smixRules,
     mixerName: r.header_params?.['mixer'] ?? null,
     servos: servoMap,
     setpointRoll,
@@ -271,7 +290,9 @@ function confidenceTitle(c: ChannelSpec): string {
   if (!cls) return '';
   switch (cls.confidence) {
     case 'confident':
-      return `Confident: matched preset "${cls.presetName ?? 'unknown'}"`;
+      return cls.via === 'smix'
+        ? "Confident: decoded from the log's smix servo-mixer table"
+        : `Confident: matched preset "${cls.presetName ?? 'unknown'}"`;
     case 'inferred':
       return `Inferred from setpoint correlation (r = ${cls.correlationScore?.toFixed(2) ?? '?'})`;
     case 'unclassified':

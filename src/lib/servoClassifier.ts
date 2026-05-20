@@ -1,35 +1,34 @@
 // Layer 2 — servo role classifier.
 //
-// PROBLEM: BF wing logs declare every servo[i] channel the firmware
-// supports (MAX_SUPPORTED_SERVOS), but doesn't include the smix table
-// in the BBL. So we know `servo[1]` carries some PWM signal, but we
-// don't know whether it's the left elevon, the rudder, or the
-// landing-gear retract. Showing raw indices in the UI is honest but
-// not helpful — the user wants "Elevon-L pegged at high endpoint,"
-// not "servo[1] pegged at high endpoint."
+// PROBLEM: a BF wing log declares every servo[i] channel the firmware
+// supports, but knowing `servo[1]` carries PWM doesn't tell you it's
+// the left elevon vs the rudder vs a gear retract. The UI wants
+// "Elevon-L pegged at high endpoint," not "servo[1] pegged."
 //
-// THREE-TIER CLASSIFICATION (per `project-servo-identification`):
+// FOUR-TIER CLASSIFICATION (best source first):
 //
-//   1. **Preset** — if the log's `mixer` header value matches a known
-//      preset, every channel's role is determined directly from the
-//      preset's index map. Confidence: 'confident'. The preset table
-//      starts empty and is populated as bench-FC dumps validate each
-//      mixer family (Brian's plan: set mixers one by one on a bench
-//      FC, dump CLI, capture the servo→role mapping).
-//   2. **Correlation** — for unknown mixers (typically
-//      MIXER_CUSTOM_AIRPLANE), Pearson-correlate each servo's PWM
-//      output against each axis's commanded setpoint. The servo's
-//      dominant axis (highest |r|) determines its general role
-//      (roll → aileron/elevon, pitch → elevator, yaw → rudder).
-//      Sign of the correlation splits left from right when an axis
-//      has two surfaces (positive ↔ negative roll command means
-//      opposite elevons). Confidence: 'inferred' (with the
-//      correlation score reported so the UI can show a "weak"
-//      qualifier).
-//   3. **Unclassified** — if no correlation clears the threshold
-//      (e.g. a servo that doesn't move much, or moves
-//      independent of the controller — gear, dropper, flap on a
-//      switch), label as 'unknown'. Confidence: 'unclassified'.
+//   0. **smix table** — Brian's wing firmware fork logs the servo
+//      mixer (`smix*`) into the BBL header. When present it is the
+//      authoritative per-log wiring: each rule's `inputSource` names
+//      the driving axis, its `rate` sign splits a differential pair.
+//      Decoded by `lib/servoMixer.ts`. Confidence: 'confident',
+//      `via: 'smix'`. Beats a preset — it's the actual config, not a
+//      mixer-family assumption. Stock BF does NOT log smix; those
+//      logs fall through.
+//   1. **Preset** — if the `mixer` header value matches a known
+//      preset, roles come from the preset's index map. Confidence:
+//      'confident', `via: 'preset'`. The preset table starts empty
+//      and is populated from bench-FC CLI dumps.
+//   2. **Correlation** — for logs with neither smix nor a known
+//      preset (typically MIXER_CUSTOM_AIRPLANE on stock firmware),
+//      Pearson-correlate each servo's PWM against each axis's
+//      commanded setpoint. Dominant axis → general role; correlation
+//      sign splits L/R. Confidence: 'inferred' (score reported so the
+//      UI can show a "weak" qualifier).
+//   3. **Unclassified** — no correlation clears the threshold (a
+//      near-static servo, or one moving independent of the
+//      controller — gear, dropper, switch-flap). Confidence:
+//      'unclassified'.
 //
 // User-override persistence (keyed by `craft_name`) is a future
 // slice — first slice ships the deterministic classification path
@@ -39,6 +38,8 @@
 // (when present) comes from ScanReport.header_params['mixer'] and is
 // passed in by the caller — keeps the classifier decoupled from where
 // the metadata sits in the bridge types.
+
+import { smixInputAxis, type SmixRule } from '@/lib/servoMixer';
 
 // ---- types ----------------------------------------------------------
 
@@ -80,8 +81,12 @@ export interface ClassifiedChannel {
   /** Correlation score against the dominant axis. Present when
    *  confidence is 'inferred'; absent for 'confident' / 'unclassified'. */
   correlationScore?: number;
-  /** Preset name that resolved the role. Present when 'confident'. */
+  /** Preset name that resolved the role. Present when 'confident'
+   *  via the preset path. */
   presetName?: string;
+  /** Which deterministic path produced a 'confident' result —
+   *  'smix' (decoded mixer table) or 'preset' (matched preset). */
+  via?: 'preset' | 'smix';
 }
 
 /** Maps from BF `mixer` header value (e.g. "FLYING_WING", verbatim
@@ -97,9 +102,10 @@ export interface MixerPreset {
 }
 
 /** Known mixer presets. STARTS EMPTY — populated incrementally from
- *  bench-FC CLI dumps. The smix table isn't in BBL so each preset
- *  needs to be validated against the firmware mapping (`mixer.c`
- *  servo mixer tables) AND ideally a physical-hardware sanity check.
+ *  bench-FC CLI dumps. Stock BF doesn't log the smix table, so each
+ *  preset needs to be validated against the firmware mapping
+ *  (`mixer.c` servo mixer tables) AND ideally a physical-hardware
+ *  sanity check. (Wing-fork logs carry `smix*` directly — tier 0.)
  *
  *  Adding a preset: append an entry below. The mixerName must match
  *  the BF log header value verbatim — check `header_params['mixer']`
@@ -281,7 +287,131 @@ function rolesFromCorrelation(
   return result;
 }
 
+// ---- smix-table classifier ---------------------------------------
+//
+// When the log carries the servo mixer (Brian's wing firmware fork),
+// roles are deterministic: a rule's `inputSource` names the driving
+// axis, a servo driven by both roll AND pitch is an elevon (pitch AND
+// yaw → V-tail), and the rate sign splits a two-servo pair into L/R.
+// No correlation, no preset assumption — the log states the wiring.
+
+interface SmixServo {
+  fieldName: string;
+  index: number;
+  axes: Set<'roll' | 'pitch' | 'yaw'>;
+  /** Summed signed roll / yaw rate across this servo's rules — sign
+   *  splits a differential pair (roll: ailerons/elevons; yaw: V-tail). */
+  rollRate: number;
+  yawRate: number;
+  /** Has a throttle / RC-direct rule — not a stabilized surface. */
+  nonStabilized: boolean;
+}
+
+/** Split a two-servo control pair into L/R by signed rate; a lone
+ *  servo or an unusual >2 group falls back to `pairedRole`. Which
+ *  physical side is "left" is unknowable from the log — the split is
+ *  deterministic and mirrors the correlation path's lower-signed-
+ *  value-is-left convention. */
+function splitPaired(
+  servo: SmixServo,
+  group: readonly SmixServo[],
+  rateOf: (s: SmixServo) => number,
+  lRole: ServoRole,
+  rRole: ServoRole,
+  pairedRole: ServoRole,
+): ServoRole {
+  if (group.length !== 2) return pairedRole;
+  const sorted = [...group].sort((a, b) => rateOf(a) - rateOf(b));
+  return servo.fieldName === sorted[0].fieldName ? lRole : rRole;
+}
+
+/** Classify every servo channel from the decoded smix rules. Returns
+ *  null when no rule targets any present servo channel (a
+ *  targetChannel ↔ servo[i] indexing mismatch) so the caller can fall
+ *  back to correlation rather than reporting everything 'unknown'. */
+function classifyFromSmix(
+  servos: ReadonlyMap<string, Float32Array>,
+  smixRules: readonly SmixRule[],
+): ClassifiedChannel[] | null {
+  const smixServos: SmixServo[] = [];
+  const nonServoFields: string[] = [];
+
+  for (const fieldName of servos.keys()) {
+    const m = /^servo\[(\d+)\]$/.exec(fieldName);
+    if (!m) { nonServoFields.push(fieldName); continue; }
+    const index = Number(m[1]);
+    const axes = new Set<'roll' | 'pitch' | 'yaw'>();
+    let rollRate = 0;
+    let yawRate = 0;
+    let nonStabilized = false;
+    for (const rule of smixRules) {
+      if (rule.targetChannel !== index) continue;
+      const axis = smixInputAxis(rule.inputSource);
+      if (axis === 'roll') { axes.add('roll'); rollRate += rule.rate; }
+      else if (axis === 'pitch') axes.add('pitch');
+      else if (axis === 'yaw') { axes.add('yaw'); yawRate += rule.rate; }
+      else nonStabilized = true;
+    }
+    smixServos.push({ fieldName, index, axes, rollRate, yawRate, nonStabilized });
+  }
+
+  // No smix rule matched any present servo channel → indexing
+  // mismatch; bail so the caller tries correlation instead of
+  // reporting every channel 'unknown'.
+  if (!smixServos.some((s) => s.axes.size > 0 || s.nonStabilized)) {
+    return null;
+  }
+
+  const rollGroup  = smixServos.filter((s) => s.axes.has('roll'));
+  const vtailGroup = smixServos.filter(
+    (s) => s.axes.has('pitch') && s.axes.has('yaw') && !s.axes.has('roll'),
+  );
+
+  const byField = new Map<string, ClassifiedChannel>();
+  for (const s of smixServos) {
+    const hasRoll = s.axes.has('roll');
+    const hasPitch = s.axes.has('pitch');
+    const hasYaw = s.axes.has('yaw');
+    let role: ServoRole;
+    if (hasRoll && hasPitch) {
+      role = splitPaired(s, rollGroup, (x) => x.rollRate,
+        'elevon-l', 'elevon-r', 'elevon-paired');
+    } else if (hasRoll) {
+      role = splitPaired(s, rollGroup, (x) => x.rollRate,
+        'aileron-l', 'aileron-r', 'aileron-paired');
+    } else if (hasPitch && hasYaw) {
+      role = splitPaired(s, vtailGroup, (x) => x.yawRate,
+        'vtail-l', 'vtail-r', 'vtail-l');
+    } else if (hasPitch) {
+      role = 'elevator';
+    } else if (hasYaw) {
+      role = 'rudder';
+    } else if (s.nonStabilized) {
+      role = 'other';
+    } else {
+      role = 'unknown';
+    }
+    byField.set(
+      s.fieldName,
+      role === 'unknown'
+        ? { fieldName: s.fieldName, role, confidence: 'unclassified' }
+        : { fieldName: s.fieldName, role, confidence: 'confident', via: 'smix' },
+    );
+  }
+  for (const fieldName of nonServoFields) {
+    byField.set(fieldName, { fieldName, role: 'unknown', confidence: 'unclassified' });
+  }
+
+  // Preserve the caller's servo-map iteration order.
+  return [...servos.keys()].map((fn) => byField.get(fn)!);
+}
+
 export interface ClassifyServosArgs {
+  /** Decoded `smix*` rules (`lib/servoMixer.ts`). When non-empty and
+   *  at least one rule targets a present servo channel, this is the
+   *  authoritative path — preset + correlation are skipped. Empty on
+   *  stock-BF logs that don't carry the mixer table. */
+  smixRules?: readonly SmixRule[];
   /** BF `mixer` header value (from `scanReport.header_params['mixer']`).
    *  When present and matching a KNOWN_PRESETS entry, every channel
    *  is classified deterministically; otherwise correlation kicks in.
@@ -297,6 +427,14 @@ export interface ClassifyServosArgs {
  *  first; falls back to correlation-based inference per channel.
  *  Channels with no signal are returned as 'unknown' / 'unclassified'. */
 export function classifyServos(args: ClassifyServosArgs): ClassifiedChannel[] {
+  // Path 0: smix table — the authoritative per-log servo wiring.
+  if (args.smixRules && args.smixRules.length > 0) {
+    const fromSmix = classifyFromSmix(args.servos, args.smixRules);
+    if (fromSmix) return fromSmix;
+    // smix rules present but none matched a servo channel (indexing
+    // mismatch) — fall through to preset / correlation.
+  }
+
   const preset = args.mixerName
     ? KNOWN_PRESETS.find((p) => p.mixerName === args.mixerName)
     : undefined;
@@ -317,6 +455,7 @@ export function classifyServos(args: ClassifyServosArgs): ClassifiedChannel[] {
         role,
         confidence: 'confident',
         presetName: preset.label,
+        via: 'preset',
       });
     }
     return out;

@@ -12,12 +12,12 @@
 // over-commanding the airframe (mechanical setup needs more throw,
 // or the rates are too aggressive).
 //
-// PWM endpoints: BF servos default to 1000–2000 µs. Per-channel
-// `servo_lowpwm_N` / `servo_highpwm_N` overrides exist in the header
-// params; a future slice could look them up from `header_params` and
-// use the actual configured limits. For now we use 1000 / 2000 with
-// a configurable margin (default 25 µs) which catches "this PWM
-// hit or got within a hair of the endpoint" without false-firing
+// PWM endpoints: BF servos default to 1000–2000 µs. `detectSaturation`
+// accepts per-call `minPwm` / `maxPwm` overrides — ServoPanel passes
+// each channel's real endpoints when the log carries the servoParam
+// table (decoded by `lib/servoMixer.ts`); otherwise the 1000 / 2000
+// defaults apply. A configurable margin (default 25 µs) catches "this
+// PWM hit or got within a hair of the endpoint" without false-firing
 // on a channel that simply lives near the endpoint for some reason.
 
 export interface SaturationConfig {

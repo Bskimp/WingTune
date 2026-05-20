@@ -5,6 +5,7 @@ import {
   correlateServosToAxes,
   pearsonCorrelation,
 } from '@/lib/servoClassifier';
+import { parseSmixRules } from '@/lib/servoMixer';
 
 function f32(values: number[]): Float32Array {
   return Float32Array.from(values);
@@ -216,5 +217,100 @@ describe('classifyServos', () => {
       expect(c.confidence).toBe('inferred');
       expect(c.correlationScore).toBeGreaterThan(0.9);
     }
+  });
+});
+
+describe('classifyServos — smix table', () => {
+  // The smix path ignores setpoints (the wiring is stated, not
+  // inferred), so the correlation inputs are empty here.
+  const NO_SP = new Float32Array(0);
+
+  test('btfl_002 config → deterministic aileron/elevator roles, confident via smix', () => {
+    const smixRules = parseSmixRules({
+      smix0: '3,0,100,0,0,100,0',   // servo3 ← roll +100
+      smix1: '4,0,-100,0,0,100,0',  // servo4 ← roll -100
+      smix2: '2,1,100,0,0,100,0',   // servo2 ← pitch
+    });
+    const servos = new Map([
+      ['servo[2]', f32([1500, 1510])],
+      ['servo[3]', f32([1500, 1510])],
+      ['servo[4]', f32([1500, 1490])],
+    ]);
+    const out = classifyServos({
+      smixRules, mixerName: null, servos,
+      setpointRoll: NO_SP, setpointPitch: NO_SP, setpointYaw: NO_SP,
+    });
+    const byField = new Map(out.map((c) => [c.fieldName, c]));
+    expect(byField.get('servo[2]')!.role).toBe('elevator');
+    expect(byField.get('servo[2]')!.confidence).toBe('confident');
+    expect(byField.get('servo[2]')!.via).toBe('smix');
+    // Lower (more negative) roll rate → left: servo4 (-100) = aileron-l.
+    expect(byField.get('servo[4]')!.role).toBe('aileron-l');
+    expect(byField.get('servo[3]')!.role).toBe('aileron-r');
+    expect(out.every((c) => c.via === 'smix')).toBe(true);
+  });
+
+  test('servos driven by roll AND pitch classify as elevons', () => {
+    const smixRules = parseSmixRules({
+      smix0: '0,0,100,0,0,100,0',   // servo0 ← roll +
+      smix1: '0,1,100,0,0,100,0',   // servo0 ← pitch
+      smix2: '1,0,-100,0,0,100,0',  // servo1 ← roll -
+      smix3: '1,1,100,0,0,100,0',   // servo1 ← pitch
+    });
+    const servos = new Map([['servo[0]', f32([1500])], ['servo[1]', f32([1500])]]);
+    const out = classifyServos({
+      smixRules, mixerName: null, servos,
+      setpointRoll: NO_SP, setpointPitch: NO_SP, setpointYaw: NO_SP,
+    });
+    const roles = new Set(out.map((c) => c.role));
+    expect(roles.has('elevon-l') && roles.has('elevon-r')).toBe(true);
+  });
+
+  test('servos driven by pitch AND yaw classify as V-tail', () => {
+    const smixRules = parseSmixRules({
+      smix0: '0,1,100,0,0,100,0',   // servo0 ← pitch
+      smix1: '0,2,100,0,0,100,0',   // servo0 ← yaw +
+      smix2: '1,1,100,0,0,100,0',   // servo1 ← pitch
+      smix3: '1,2,-100,0,0,100,0',  // servo1 ← yaw -
+    });
+    const servos = new Map([['servo[0]', f32([1500])], ['servo[1]', f32([1500])]]);
+    const out = classifyServos({
+      smixRules, mixerName: null, servos,
+      setpointRoll: NO_SP, setpointPitch: NO_SP, setpointYaw: NO_SP,
+    });
+    const roles = new Set(out.map((c) => c.role));
+    expect(roles.has('vtail-l') && roles.has('vtail-r')).toBe(true);
+  });
+
+  test('a servo with no smix rule is unclassified', () => {
+    const smixRules = parseSmixRules({ smix0: '0,1,100,0,0,100,0' });
+    const servos = new Map([['servo[0]', f32([1500])], ['servo[5]', f32([1500])]]);
+    const out = classifyServos({
+      smixRules, mixerName: null, servos,
+      setpointRoll: NO_SP, setpointPitch: NO_SP, setpointYaw: NO_SP,
+    });
+    const byField = new Map(out.map((c) => [c.fieldName, c]));
+    expect(byField.get('servo[0]')!.role).toBe('elevator');
+    expect(byField.get('servo[5]')!.role).toBe('unknown');
+    expect(byField.get('servo[5]')!.confidence).toBe('unclassified');
+  });
+
+  test('smix rules targeting absent channels fall through to correlation', () => {
+    // smix targets channels 5/6 but the log only has servo[0] — an
+    // indexing mismatch; the classifier must not report all-unknown.
+    const smixRules = parseSmixRules({
+      smix0: '5,0,100,0,0,100,0',
+      smix1: '6,1,100,0,0,100,0',
+    });
+    const setpointRoll = f32([0, 1, 2, 3, 4, 5]);
+    const zero         = f32([0, 0, 0, 0, 0, 0]);
+    const servos = new Map([['servo[0]', f32([1500, 1520, 1540, 1560, 1580, 1600])]]);
+    const out = classifyServos({
+      smixRules, mixerName: null, servos,
+      setpointRoll, setpointPitch: zero, setpointYaw: zero,
+    });
+    // Correlation path ran instead → not a confident smix result.
+    expect(out[0].confidence).not.toBe('confident');
+    expect(out[0].via).toBeUndefined();
   });
 });
