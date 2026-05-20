@@ -15,8 +15,14 @@ don't re-litigate it later.
 
 ## Priority order
 
-1. **M-FF — Feedforward effectiveness + maneuver detection** (combined)
-2. **M-Coupling — Cross-axis coupling matrix**
+> **Status (2026-05-20):** item 1 (M-FF) shipped — commit `abff4fa`,
+> panel on the Step tab; the display-smoothing slider shipped too
+> (`d28c836`). Item 2 (M-Coupling) is the **active milestone** —
+> execution detail in `docs/wingtune-m-coupling-execution.md`.
+
+1. ~~**M-FF — Feedforward effectiveness + maneuver detection**~~ —
+   ✅ **shipped** abff4fa (2026-05-19)
+2. **M-Coupling — Cross-axis coupling matrix** ← **active**
 3. **M-Servo-2 — Servo hunt + airframe transfer function**
 4. **M-Pilot — Pilot-input style analysis**
 5. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
@@ -33,8 +39,9 @@ don't re-litigate it later.
 
 **UX / infrastructure follow-ups** (not analytics — surfaced during
 M-FF, 2026-05-19):
-- **App-wide display smoothing** — global raw/smoothed toggle + strength
-  slider.
+- ~~**App-wide display smoothing**~~ — ✅ **shipped** d28c836
+  (2026-05-19): `lib/displaySmooth.ts` + `SmoothingControl.vue`,
+  display-only boxcar on 6 time-domain panels.
 - **Tab IA consolidation** — 10 tabs is a lot; collapse the wing-
   scheduled-gain family into one.
 
@@ -44,7 +51,13 @@ to tune by feel — turning it into a number is high user value.
 
 ---
 
-## M-FF — Feedforward effectiveness + maneuver detection
+## M-FF — Feedforward effectiveness + maneuver detection ✅ SHIPPED
+
+> ✅ Shipped 2026-05-19 (commit `abff4fa`): `lib/maneuverDetect.ts`
+> (segment selector), `lib/ffEffectiveness.ts`,
+> `lib/recommenders/ffEffectiveness.ts` (diagnostic-only),
+> `FFPanel.vue` on the Step tab. The sketch below is the original
+> design intent, kept for reference.
 
 **Why:** FF is one of the harder terms to tune even with data. It
 responds to stick *velocity* (rate of setpoint change), not error —
@@ -425,7 +438,10 @@ Surfaced during M-FF when the feedforward panel's raw setpoint-velocity
 trace rendered as a blocky mess and the 10-tab bar started feeling
 crowded. Neither is analytics — both are presentation/IA.
 
-### App-wide display smoothing
+### App-wide display smoothing ✅ SHIPPED
+
+> ✅ Shipped 2026-05-19 (commit `d28c836`). Sketch below kept for
+> reference.
 
 **Why:** the raw derivative on the FF panel (and noisy raw traces
 generally — Tracking, Servos, PID contribution, SPA, S-Term) is hard

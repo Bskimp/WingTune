@@ -37,9 +37,11 @@
 
 Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
 M1 functionally complete (corpus track aside). **Wing analytics
-suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M1.7 multi-log
-compare + M1.7.1 time-alignment UI all shipped.** From this point
-forward the project is **polish + Brian-blocked** (visual-validation
+suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M-FF feedforward /
+maneuver-detection + M1.7 multi-log compare + M1.7.1 time-alignment
+UI all shipped.** Analytics-plan milestone M-FF closed 2026-05-19;
+**M-Coupling is the active milestone** (analytics-plan priority #2).
+Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
 2026-05-17 + M1.7.1 landed 2026-05-18: multi-tenant Web Worker,
@@ -559,6 +561,41 @@ bearing design decisions.
       validate cleanly via `npm run corpus:validate:private`.
       See [[project-corpus-pull-state]] memory.
 
+- **2026-05-19/20 session — M-FF + display smoothing + polish
+  (commits abff4fa..81a417f).** Closed analytics-plan milestone
+  #1 (M-FF) plus polish + docs. High-level:
+    · **M-FF — feedforward effectiveness + maneuver detection
+      (abff4fa).** `lib/maneuverDetect.ts` — setpoint-velocity
+      segment selector flagging + classifying aggressive-input
+      windows (snap roll / pitch punch / mixed); shared
+      infrastructure, not a standalone panel.
+      `lib/ffEffectiveness.ts` — per-axis FF coverage
+      (`mean|F| / (mean|F| + mean|P|)` inside maneuver windows) +
+      leading-edge overshoot detection. `FFPanel.vue` on the Step
+      tab — now "Step · FF" double-duty via new `StepTab.vue`.
+      `lib/recommenders/ffEffectiveness.ts` — diagnostic-only
+      (yellow, no CLI; CLI deferred until multi-flight
+      calibration, per the SPA / inputChain pattern).
+    · **Global display-smoothing slider (d28c836).**
+      `lib/displaySmooth.ts` `smoothTrace()` — NaN-aware boxcar,
+      strength 0 a no-op. `view.smoothingStrength` (0-4) +
+      `SmoothingControl.vue`, gated to the smoothable tabs
+      (Tracking / Servos / SPA / S-Term / Step·FF), applied to
+      6 panels' display traces. HARD RULE: display-only — never
+      feeds analysis; header metrics stay computed from raw
+      Float32.
+    · **Polish:** hover tooltips on analysis-panel header
+      metrics (23f71d9); airspeed fix — max-voltage pinned from
+      the log + pitch routed through the signal registry
+      (ba3716b); independent-verification test coverage for
+      step response + TPA curve (efc6d57); smix-table decode for
+      deterministic servo classification (81a417f).
+    · **Docs:** analytics expansion plan + planning-doc index
+      (0818a63), M-FilterSim / smoothing / tab-IA plan items
+      (a4493e0), wing-regime spectral batch (7ca6093), end-to-end
+      tuning-workflow guide (5bcd526), per-tab tuning guide
+      (cc844e0).
+
 **In flight / pending:**
 
 - **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
@@ -614,19 +651,20 @@ bearing design decisions.
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** nothing in the
-queue is genuinely unblocked. The 2026-05-18 evening session
-(commits 432bdb9..56b13a1) closed out four discretionary slices
-(D step-response metric realignment, A first-throttle auto-align
-fallback, B M-Servo asymmetric linkage detection; C was already
-done in M1.7.1). 178/178 unit tests pass, typecheck clean. Per-
-tab tuning guide doc lives at `docs/wingtune-tab-guide.md` for
-new-contributor onboarding + workflow reference. Remaining work
-is flight-blocked (recommender threshold recalibration needs a
-clean PD-isolated reference flight; M3/M5/M6/M7 visual
-validation needs throttle-varying cruise + the right debug
-modes for stock-BF logs) or held on Brian's call (upstream
-`blackbox-log` PR, upstream firmware writer-order PR).
+**Immediate next step when resuming code work:** the analytics
+expansion plan (`docs/wingtune-analytics-plan.md`) drives from
+here. M-FF (priority #1) shipped 2026-05-19 (abff4fa). **M-Coupling
+— the cross-axis coupling matrix (analytics-plan priority #2) — is
+the active milestone.** Decisions locked 2026-05-20: gate the
+coupling measurement on transient windows only (reuse the M-FF
+`maneuverDetect.ts` segment selector); diagnostic-only — yellow
+recs, no CLI (coupling is a mixer / CG / mechanical diagnosis with
+no firmware fix). Execution detail in
+`docs/wingtune-m-coupling-execution.md`. All other near-term work
+is flight-blocked (Step recommender threshold recalibration needs
+a clean F=0+S=0 PD-isolated reference flight; M3/M5/M6/M7 visual
+validation needs throttle-varying cruise) or held on Brian's call
+(upstream `blackbox-log` PR, upstream firmware writer-order PR).
 
 ## Cardinal rules
 
