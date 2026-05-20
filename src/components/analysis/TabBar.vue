@@ -50,6 +50,7 @@ const recCount = computed(() => {
     time: time.value,
     gpsTimeSec: gpsTimeSec.value,
     filterConfig: filterConfig.value,
+    headerParams: r.header_params,
   }).length;
 });
 

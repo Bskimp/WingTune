@@ -80,6 +80,7 @@ const recs = computed(() => {
     time: log.time,
     gpsTimeSec: log.gpsTimeSec,
     filterConfig: log.scanReport.filter_config,
+    headerParams: log.scanReport.header_params,
   });
 });
 

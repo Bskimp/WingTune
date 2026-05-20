@@ -20,9 +20,10 @@
 // color. Outside each log's fit window (the GPS-locked sub-range of
 // the log) traces clamp-extend to the edge value — visually this
 // reads as a flat segment at log boundaries, which is benign for the
-// compare workflow. Fit window text, recovered params (delay, gravity,
-// max V, R², RMS), and cursor readout all remain anchored to the
-// active log; flip the eye to inspect another log's fit.
+// compare workflow. Fit window text, fitted params (delay, gravity),
+// max voltage (read from the log header, not fitted), R²/RMS, and
+// cursor readout all remain anchored to the active log; flip the eye
+// to inspect another log's fit.
 
 import { computed, ref, watchEffect } from 'vue';
 import { storeToRefs } from 'pinia';
@@ -39,6 +40,7 @@ import { nearestTimeIndex } from '@/lib/dtype';
 import {
   buildAirspeedFitInputs,
   fitBasicAirspeedModel,
+  resolveAirspeedPitchField,
   type AirspeedFitResult,
   type BuiltInputs,
 } from '@/lib/airspeedFit';
@@ -61,10 +63,9 @@ const COLORS = {
   warn:   '#ffc46a',
 } as const;
 
-const REQUIRED_AND_OPTIONAL = [
+const REQUIRED_FIELDS = [
   'rcCommand[3]',
   'vbatLatest',
-  'attitude[1]',
   'gps:GPS_speed',
 ] as const;
 
@@ -94,23 +95,30 @@ const logEntries = computed<LogEntry[]>(() => {
 
 const visibleEntries = computed(() => logEntries.value.filter((e) => !e.hidden));
 
-// Hydrate required + optional fields across every loaded log.
+// Hydrate required fields + the registry-resolved pitch field across
+// every loaded log. Pitch resolves per-log (USE_WING wingTpaPitch /
+// DEBUG_TPA ch2 / raw attitude[1]).
 watchEffect(() => {
   for (const { log } of logEntries.value) {
-    session.ensureFields(log.id, [...REQUIRED_AND_OPTIONAL]).catch(() => {});
+    const pitchField = resolveAirspeedPitchField(log.scanReport?.capability);
+    session
+      .ensureFields(log.id, [...REQUIRED_FIELDS, pitchField])
+      .catch(() => {});
   }
 });
 
 const isHydrating = computed(() =>
-  REQUIRED_AND_OPTIONAL.some((f) => activeLog.hydrating.value.has(f)),
+  REQUIRED_FIELDS.some((f) => activeLog.hydrating.value.has(f)),
 );
 
 // Active log readouts.
 const activeBuilt = computed<BuiltInputs | null>(() =>
   buildAirspeedFitInputs({
-    time:       activeLog.time.value,
-    gpsTimeSec: activeLog.gpsTimeSec.value,
-    fields:     activeLog.fields.value,
+    time:        activeLog.time.value,
+    gpsTimeSec:  activeLog.gpsTimeSec.value,
+    fields:      activeLog.fields.value,
+    headerParams: activeLog.scanReport.value?.header_params,
+    capability:  activeLog.scanReport.value?.capability,
   }),
 );
 
@@ -137,9 +145,11 @@ const allFits = computed<LogFitBundle[]>(() => {
   const out: LogFitBundle[] = [];
   for (const entry of visibleEntries.value) {
     const built = buildAirspeedFitInputs({
-      time:       entry.log.time,
-      gpsTimeSec: entry.log.gpsTimeSec,
-      fields:     entry.log.fields,
+      time:        entry.log.time,
+      gpsTimeSec:  entry.log.gpsTimeSec,
+      fields:      entry.log.fields,
+      headerParams: entry.log.scanReport?.header_params,
+      capability:  entry.log.scanReport?.capability,
     });
     if (!built) continue;
     const result = fitBasicAirspeedModel(built.inputs);
@@ -242,6 +252,14 @@ const fitWindowText = computed(() => {
   const off = activeAlign.offsetSec.value;
   // Surface the window in session time so it matches the chart x-axis.
   return `${(t[0] + off).toFixed(1)}–${(t[t.length - 1] + off).toFixed(1)}s · ${t.length.toLocaleString()} samples`;
+});
+
+const maxVoltageTooltip = computed(() => {
+  const b = activeBuilt.value;
+  if (!b) return '';
+  return b.maxVoltageSource === 'header'
+    ? `Battery max voltage, V×100 — read from this log's saved BF config (tpa_speed_max_voltage). A known physical input, NOT fitted: it is degenerate with the gravity parameter, so fitting it yields unphysical values.`
+    : `Battery max voltage, V×100 — ESTIMATED from peak logged battery voltage (this log's header had no tpa_speed_max_voltage). Not fitted. Set tpa_speed_max_voltage in BF for an exact value.`;
 });
 
 const { cursorTime } = storeToRefs(view);
@@ -351,10 +369,15 @@ const multiLogNote = computed(() => {
           </div>
           <div
             class="text-right cursor-help"
-            title="The model's max-voltage reference parameter, shown x100 (BF's integer CLI encoding — divide by 100 for the real value). A fitted tpa_speed_basic CLI parameter."
+            :title="maxVoltageTooltip"
           >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">max V&times;100</div>
-            <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(activeFit.params.maxVoltageX100) }}</div>
+            <div class="font-mono text-[13px] text-bp-ink">
+              {{ activeBuilt?.inputs.maxVoltageX100 ?? '—' }}<span
+                v-if="activeBuilt?.maxVoltageSource === 'vbat-fallback'"
+                class="text-bp-warn text-[9px] ml-0.5 align-top"
+              >est</span>
+            </div>
           </div>
           <div
             class="text-right cursor-help"

@@ -1,8 +1,19 @@
 // Layer 2 — BF BASIC airspeed model: forward integrator + Nelder-Mead fit.
 //
 // Fits BF's `tpa_speed_type = BASIC` model parameters against logged GPS
-// 3D speed so M3 can emit `set tpa_speed_basic_delay = X` / `tpa_speed_basic_gravity = Y`
-// / `tpa_speed_max_voltage = Z` recommendations.
+// 3D speed so M3 can emit `set tpa_speed_basic_delay = X` /
+// `tpa_speed_basic_gravity = Y` recommendations.
+//
+// MAX VOLTAGE IS PINNED, NOT FITTED. `tpa_speed_max_voltage` is a known
+// physical fact (the battery's full-charge voltage) and it is degenerate
+// with `gravity` in the thrust term — `thrust ∝ TWR / maxVoltage`, so an
+// unconstrained 3-param fit lets the optimiser trade the two off along a
+// flat valley and land both on unphysical values (observed: gravity
+// pinned at its 100 % clamp, maxVoltage drifting to ~28 V on a 3S log).
+// So it is read from the log's saved BF config (`tpa_speed_max_voltage`
+// header param) and fed in as a fixed `ModelInputs.maxVoltageX100`; only
+// `delay` + `gravity` are fitted. Fallback when the header lacks the
+// key: peak observed `vbatLatest` (a freshly-charged pack ≈ its max V).
 //
 // PHYSICAL MODEL (matches `project-bf-basic-airspeed-model` memory):
 //
@@ -32,28 +43,30 @@
 // in the user-facing CLI ranges. Sample gaps (dt > 1s or non-finite)
 // hold the previous airspeed rather than blowing up.
 //
-// OPTIMIZER: generic Nelder-Mead from `lib/nelderMead.ts`. Three
-// params, smooth loss surface, no gradients needed — NM converges in
-// 50–150 iters on typical inputs. The cost-function wrapper clamps
-// the raw simplex vector to legal CLI ranges before evaluating, so
-// the optimiser can step anywhere without emitting NaN. Initial-step
-// sizes are passed per-axis (250 ms / 12 % / 250 V×100) to reflect
-// the wildly different param scales. Avoids pulling in
-// `ml-levenberg-marquardt` for a 3D problem that doesn't need it.
+// OPTIMIZER: generic Nelder-Mead from `lib/nelderMead.ts`. Two
+// params (delay, gravity), smooth loss surface, no gradients needed —
+// NM converges in 50–150 iters on typical inputs. The cost-function
+// wrapper clamps the raw simplex vector to legal CLI ranges before
+// evaluating, so the optimiser can step anywhere without emitting NaN.
+// Initial-step sizes are passed per-axis (250 ms / 12 %) to reflect
+// the differing param scales. Avoids pulling in
+// `ml-levenberg-marquardt` for a 2D problem that doesn't need it.
 
 import { fitNelderMead } from '@/lib/nelderMead';
 import { resampleToTimeAxis } from '@/lib/timeAlign';
+import { resolveSignal } from '@/lib/signalRegistry';
+import type { CapabilityReport } from '@/lib/wasmBridge';
 
 const G = 9.81;
 const ATANH_HALF = 0.5493061443340549;
 
+/** The two genuinely fittable parameters. `tpa_speed_max_voltage` is
+ *  deliberately NOT here — it is a fixed model input, see file header. */
 export interface BasicAirspeedParams {
   /** `tpa_speed_basic_delay` — milliseconds. */
   delayMs: number;
   /** `tpa_speed_basic_gravity` — percent. */
   gravityPct: number;
-  /** `tpa_speed_max_voltage` — V × 100 (BF CLI scaling). */
-  maxVoltageX100: number;
 }
 
 export interface ModelInputs {
@@ -66,6 +79,9 @@ export interface ModelInputs {
   vbat: Float32Array;
   /** Pitch in radians, BF convention (nose-up positive). */
   pitch: Float32Array;
+  /** `tpa_speed_max_voltage` — V × 100 (BF CLI scaling). FIXED, not
+   *  fitted: resolved by `buildAirspeedFitInputs` from the log header. */
+  maxVoltageX100: number;
 }
 
 export interface AirspeedFitInputs extends ModelInputs {
@@ -100,7 +116,6 @@ export interface AirspeedFitResult {
 interface InternalConstants {
   twr: number;
   k: number;
-  vMaxVolts: number;
 }
 
 function deriveConstants(p: BasicAirspeedParams): InternalConstants {
@@ -110,15 +125,15 @@ function deriveConstants(p: BasicAirspeedParams): InternalConstants {
   const tau = delaySec / ATANH_HALF;
   const vTerm = tau * twr * G;
   const k = 1 / (vTerm * tau);
-  const vMaxVolts = Math.max(0.01, p.maxVoltageX100 / 100);
-  return { twr, k, vMaxVolts };
+  return { twr, k };
 }
 
 export function integrateBasicAirspeedModel(
   params: BasicAirspeedParams,
   inputs: ModelInputs,
 ): Float32Array {
-  const { twr, k, vMaxVolts } = deriveConstants(params);
+  const { twr, k } = deriveConstants(params);
+  const vMaxVolts = Math.max(0.01, inputs.maxVoltageX100 / 100);
   const n = inputs.time.length;
   const out = new Float32Array(n);
   if (n === 0) return out;
@@ -156,11 +171,10 @@ function meanSquaredResidual(params: BasicAirspeedParams, inputs: AirspeedFitInp
   return n > 0 ? ssr / n : Infinity;
 }
 
-function clampParams(d: number, g: number, v: number): BasicAirspeedParams {
+function clampParams(d: number, g: number): BasicAirspeedParams {
   return {
     delayMs: Math.max(50, Math.min(5000, d)),
     gravityPct: Math.max(5, Math.min(100, g)),
-    maxVoltageX100: Math.max(420, Math.min(8400, v)),
   };
 }
 
@@ -168,29 +182,27 @@ export function fitBasicAirspeedModel(
   inputs: AirspeedFitInputs,
   options: { initialParams?: BasicAirspeedParams; maxIterations?: number } = {},
 ): AirspeedFitResult {
-  const init = options.initialParams ?? { delayMs: 1000, gravityPct: 50, maxVoltageX100: 2520 };
+  const init = options.initialParams ?? { delayMs: 1000, gravityPct: 50 };
   const maxIter = options.maxIterations ?? 250;
 
   // Cost wrapper for the generic Nelder-Mead optimiser. Clamps the
   // raw vector to legal CLI ranges before evaluating — keeps the
   // optimiser free to step anywhere without producing NaN-prone params.
+  // `maxVoltageX100` rides on `inputs` (fixed), so the simplex is 2-D.
   const cost = (vec: number[]): number => {
-    const p = clampParams(vec[0], vec[1], vec[2]);
+    const p = clampParams(vec[0], vec[1]);
     return meanSquaredResidual(p, inputs);
   };
 
-  // Per-axis ABSOLUTE initial step sizes (ms / % / V×100). The
-  // previous specialised version used per-axis ratios (×1.25 / ×1.25 /
-  // ×1.1) which work out to roughly the same absolute steps as below
-  // for the default seed. Absolute keeps the simplex sized sensibly
-  // regardless of seed magnitude.
+  // Per-axis ABSOLUTE initial step sizes (ms / %). Absolute keeps the
+  // simplex sized sensibly regardless of seed magnitude.
   const fit = fitNelderMead(
-    [init.delayMs, init.gravityPct, init.maxVoltageX100],
+    [init.delayMs, init.gravityPct],
     cost,
-    { maxIter, initialStep: [250, 12, 250] },
+    { maxIter, initialStep: [250, 12] },
   );
 
-  const winner = clampParams(fit.x[0], fit.x[1], fit.x[2]);
+  const winner = clampParams(fit.x[0], fit.x[1]);
   const predicted = integrateBasicAirspeedModel(winner, inputs);
   const residuals = new Float32Array(predicted.length);
 
@@ -238,10 +250,21 @@ export interface BuildInputsArgs {
    *  or the function returns null — no GPS lock window, no fit. */
   gpsTimeSec: Float32Array;
   /** Hydrated field map (logStore.fields). Reads `rcCommand[3]`,
-   *  `vbatLatest`, `attitude[1]`, `gps:GPS_speed`. Throttle and vbat
-   *  are required; attitude (pitch) is optional and falls back to
-   *  level-flight zero when missing. */
+   *  `vbatLatest`, `gps:GPS_speed`, plus the pitch field resolved via
+   *  the signal registry (see `capability`). Throttle and vbat are
+   *  required; pitch is optional and falls back to level-flight zero
+   *  when missing. */
   fields: ReadonlyMap<string, Float32Array>;
+  /** BBL header params (`scanReport.header_params`). When present,
+   *  `tpa_speed_max_voltage` is read from here to pin the fixed
+   *  max-voltage model input. Absent → peak-vbat fallback. */
+  headerParams?: Record<string, string>;
+  /** Scan capability report (`scanReport.capability`). When present,
+   *  the pitch field is resolved through the signal registry
+   *  (`attitude_pitch`) so USE_WING `wingTpaPitch` / DEBUG_TPA ch2 are
+   *  picked up, not just the raw `attitude[1]` field. Absent → the
+   *  raw `attitude[1]` field is used directly. */
+  capability?: CapabilityReport;
 }
 
 export interface BuiltInputs {
@@ -250,12 +273,74 @@ export interface BuiltInputs {
    *  Surface as a UI annotation — the gravity term is unconstrained
    *  in this case since dive/climb signal is absent. */
   pitchFromFallback: boolean;
+  /** Where the fixed `inputs.maxVoltageX100` came from: the log's
+   *  saved `tpa_speed_max_voltage` CLI value, or a peak-vbat estimate
+   *  when the header lacked the key. Surface as a UI annotation. */
+  maxVoltageSource: 'header' | 'vbat-fallback';
+}
+
+/** BF CLI valid range for `tpa_speed_max_voltage` (V × 100): a 1S
+ *  pack (~4.2 V) up to a 20S pack (~84 V). */
+const MAX_VOLTAGE_X100_MIN = 420;
+const MAX_VOLTAGE_X100_MAX = 8400;
+
+/** Resolve the FIXED max-voltage model input. Prefers the log's saved
+ *  `tpa_speed_max_voltage` CLI value (exact — it is the user's real
+ *  battery config); falls back to peak observed vbat × 100 (a freshly-
+ *  charged pack rests near its max voltage). Never fitted — see the
+ *  file header for why fitting it produces unphysical params. */
+export function resolveMaxVoltageX100(
+  headerParams: Record<string, string> | undefined,
+  vbat: Float32Array,
+): { maxVoltageX100: number; maxVoltageSource: 'header' | 'vbat-fallback' } {
+  const raw = headerParams?.['tpa_speed_max_voltage'];
+  if (raw !== undefined) {
+    const parsed = Number.parseInt(raw, 10);
+    if (
+      Number.isFinite(parsed) &&
+      parsed >= MAX_VOLTAGE_X100_MIN &&
+      parsed <= MAX_VOLTAGE_X100_MAX
+    ) {
+      return { maxVoltageX100: parsed, maxVoltageSource: 'header' };
+    }
+  }
+  let vMax = 0;
+  for (let i = 0; i < vbat.length; i++) {
+    if (isFinite(vbat[i]) && vbat[i] > vMax) vMax = vbat[i];
+  }
+  const fallback = Math.max(
+    MAX_VOLTAGE_X100_MIN,
+    Math.min(MAX_VOLTAGE_X100_MAX, Math.round(vMax * 100)),
+  );
+  return { maxVoltageX100: fallback, maxVoltageSource: 'vbat-fallback' };
+}
+
+/** Resolve which hydrated field carries pitch attitude for the airspeed
+ *  model. Routes through the signal registry's `attitude_pitch` signal
+ *  so USE_WING `wingTpaPitch` and DEBUG_TPA ch2 are found — not only
+ *  the raw `attitude[1]` field. Returns `'attitude[1]'` as the default
+ *  when no capability report is available (e.g. unit-test callers) or
+ *  the registry resolves nothing. All candidates share BF's decidegree
+ *  / negative-nose-up convention, so the caller's unit conversion is
+ *  identical regardless of which field is returned. */
+export function resolveAirspeedPitchField(
+  capability: CapabilityReport | undefined,
+): string {
+  if (capability) {
+    const r = resolveSignal('attitude_pitch', null, capability);
+    if (r.state === 'resolved') {
+      return r.source.kind === 'debug'
+        ? `debug[${r.source.channel}]`
+        : r.source.field;
+    }
+  }
+  return 'attitude[1]';
 }
 
 export function buildAirspeedFitInputs(args: BuildInputsArgs): BuiltInputs | null {
   const throttle = args.fields.get('rcCommand[3]');
   const vbat = args.fields.get('vbatLatest');
-  const pitchRaw = args.fields.get('attitude[1]');
+  const pitchRaw = args.fields.get(resolveAirspeedPitchField(args.capability));
   const gpsSpeedRaw = args.fields.get('gps:GPS_speed');
 
   if (!throttle || throttle.length === 0) return null;
@@ -289,17 +374,27 @@ export function buildAirspeedFitInputs(args: BuildInputsArgs): BuiltInputs | nul
     th[j] = thv;
     vb[j] = vbat[k];
     if (!pitchFromFallback) {
-      // attitude[1] is deci-degrees, BF sign convention NEGATIVE for
-      // nose-up / POSITIVE for nose-down. Integrator expects nose-up-
-      // positive so we negate at this boundary (single source of
-      // truth — the integrator never sees raw BF pitch).
+      // The resolved pitch field (attitude[1] / wingTpaPitch /
+      // DEBUG_TPA ch2) is deci-degrees, BF sign convention NEGATIVE
+      // for nose-up / POSITIVE for nose-down. Integrator expects
+      // nose-up-positive so we negate at this boundary (single source
+      // of truth — the integrator never sees raw BF pitch).
       pi[j] = -pitchRaw![k] * 0.1 * Math.PI / 180;
     }
   }
   const gpsSpeed = resampleToTimeAxis(args.gpsTimeSec, gpsSpeedRaw, t);
+
+  // Pin max voltage from the log header (it is a known battery fact,
+  // not a fittable parameter — see file header).
+  const { maxVoltageX100, maxVoltageSource } = resolveMaxVoltageX100(
+    args.headerParams,
+    vb,
+  );
+
   return {
-    inputs: { time: t, throttle: th, vbat: vb, pitch: pi, gpsSpeed },
+    inputs: { time: t, throttle: th, vbat: vb, pitch: pi, gpsSpeed, maxVoltageX100 },
     pitchFromFallback,
+    maxVoltageSource,
   };
 }
 

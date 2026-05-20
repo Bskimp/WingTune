@@ -181,13 +181,17 @@ export const SIGNALS: Record<string, SignalDef> = {
     ],
   },
 
-  // Attitude pitch angle. Main-frame `wingTpaPitch`; debug fallback
-  // DEBUG_TPA ch2 (decidegrees, ±900 = ±90° gimbal-clamped).
+  // Attitude pitch angle — consumed by the M3 airspeed model's gravity
+  // term. `wingTpaPitch` (USE_WING main-frame) and the standard
+  // `attitude[1]` blackbox field are both decidegrees in BF's sign
+  // convention (negative = nose-up); debug fallback DEBUG_TPA ch2
+  // (decidegrees, ±900 = ±90° gimbal-clamped).
   attitude_pitch: {
     id: 'attitude_pitch',
     perAxis: false,
     sources: () => [
       { kind: 'main_frame', field: 'wingTpaPitch' },
+      { kind: 'main_frame', field: 'attitude[1]' },
       { kind: 'debug', mode: 'TPA', channel: 2, expected_range: [-900, 900] },
     ],
   },

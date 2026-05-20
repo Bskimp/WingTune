@@ -32,7 +32,11 @@ import type {
 export const airspeedBasicRequiredFields: readonly string[] = [
   'rcCommand[3]',
   'vbatLatest',
+  // Pitch — every candidate the signal registry's `attitude_pitch`
+  // can resolve to, so whichever one this log has is hydrated.
   'attitude[1]',
+  'wingTpaPitch',
+  'debug[2]',
   'gps:GPS_speed',
 ];
 
@@ -44,8 +48,8 @@ const TUNING_HEURISTICS = [
   '  · Too loose during zero-throttle dive → decrease tpa_speed_basic_gravity.',
 ].join('\n');
 
-export const airspeedBasicRecommender: Recommender = ({ fields, time, gpsTimeSec }) => {
-  const built = buildAirspeedFitInputs({ time, gpsTimeSec, fields });
+export const airspeedBasicRecommender: Recommender = ({ fields, time, gpsTimeSec, headerParams, capability }) => {
+  const built = buildAirspeedFitInputs({ time, gpsTimeSec, fields, headerParams, capability });
   if (!built) return [];
 
   const result = fitBasicAirspeedModel(built.inputs);
@@ -107,16 +111,24 @@ export const airspeedBasicRecommender: Recommender = ({ fields, time, gpsTimeSec
   }
 
   // Cardinal rule: red removes the CLI entirely (not just disabled).
+  // `tpa_speed_max_voltage` is NOT emitted — it is a known battery fact
+  // pinned from the log header, not a fitted output (see airspeedFit.ts
+  // file header for why fitting it produces unphysical params).
   const cli = confidence === 'red' ? [] : [
     'set tpa_speed_type = BASIC',
     `set tpa_speed_basic_delay = ${Math.round(result.params.delayMs)}`,
     `set tpa_speed_basic_gravity = ${Math.round(result.params.gravityPct)}`,
-    `set tpa_speed_max_voltage = ${Math.round(result.params.maxVoltageX100)}`,
   ];
+
+  const maxVNote =
+    built.maxVoltageSource === 'header'
+      ? `Max voltage pinned at ${built.inputs.maxVoltageX100} (V×100) from the log's saved tpa_speed_max_voltage — a known battery fact, not fitted.`
+      : `Max voltage estimated at ${built.inputs.maxVoltageX100} (V×100) from peak battery voltage (log header had no tpa_speed_max_voltage) — not fitted. If wrong, set tpa_speed_max_voltage to your pack's full-charge voltage ×100.`;
 
   const detail = [
     `Fitted BF's BASIC airspeed model against GPS 3D speed across ${fitWindowSec.toFixed(1)}s of flight (${built.inputs.time.length.toLocaleString()} aligned samples).`,
-    `Recovered params: delay=${Math.round(result.params.delayMs)} ms, gravity=${Math.round(result.params.gravityPct)} %, max V×100=${Math.round(result.params.maxVoltageX100)}.`,
+    `Recovered params: delay=${Math.round(result.params.delayMs)} ms, gravity=${Math.round(result.params.gravityPct)} %.`,
+    maxVNote,
     `Fit quality: R²=${result.rSquared.toFixed(3)}, RMS residual ${result.rmsResidual.toFixed(2)} m/s.`,
     '',
     TUNING_HEURISTICS,
@@ -155,7 +167,6 @@ export const airspeedBasicRecommender: Recommender = ({ fields, time, gpsTimeSec
       ['tpa_speed_type',         'BASIC'],
       ['tpa_speed_basic_delay',  Math.round(result.params.delayMs).toString()],
       ['tpa_speed_basic_gravity', Math.round(result.params.gravityPct).toString()],
-      ['tpa_speed_max_voltage',  Math.round(result.params.maxVoltageX100).toString()],
     ] as const,
     cli,
     evidence,

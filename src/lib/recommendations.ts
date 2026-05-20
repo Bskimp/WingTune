@@ -124,6 +124,10 @@ export interface RecommenderArgs {
    *  the spectrum-filter recommender for notch-coverage checks and
    *  filter-delay-budget recs. */
   filterConfig: FilterConfig | null;
+  /** BBL header params (`scanReport.header_params`) — every CLI key/
+   *  value BF wrote into the log. The airspeed-basic recommender reads
+   *  `tpa_speed_max_voltage` from here to pin its fixed model input. */
+  headerParams: Record<string, string>;
 }
 
 export type Recommender = (args: RecommenderArgs) => Recommendation[];
