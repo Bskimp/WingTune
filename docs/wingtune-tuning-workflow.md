@@ -130,10 +130,6 @@ into the gyro signal — back off the trim.
 **Gotchas:**
 - Don't trim filters so aggressively that motor / prop noise (sub-
   100 Hz on wings) feeds into D-term and shows up as gyro oscillation.
-- Spectrum raw needs either `gyroUnfilt[]` (USE_WING fork — always
-  available) or `debug_mode = GYRO_RAW` (stock BF — only logs raw
-  when this mode is selected, replaces other debug data).
-
 ---
 
 ## Phase 3 — PD-isolation calibration sortie
@@ -190,8 +186,9 @@ multi-log compare.
 
 ## Phase 4 — PD ratio tuning (with the calibration log in hand)
 
-Goal: iterate P / I / D values until Step response shows clean
-tracking on all three axes.
+Goal: iterate P / D values until Step response shows clean
+tracking on all three axes. (I is not part of the PD ratio — it's
+set separately; this phase is purely the P-to-D relationship.)
 
 **Targets (wing baseline):**
 - PEAK 1.10-1.30 → mild controlled overshoot, fast response
@@ -201,7 +198,7 @@ tracking on all three axes.
 **Diagnose from the Step curve:**
 - **PEAK > 1.30** (hard overshoot, rings) → P or D too high. Try
   lowering P by ~10% first; if ringing persists, lower D. Re-fly.
-- **PEAK < 1.05** AND LATENCY > 40 ms (sluggish) → P or I too low.
+- **PEAK < 1.05** AND LATENCY > 40 ms (sluggish) → P too low.
   Raise P by ~10%, re-fly.
 - **PEAK = NaN** (response never crosses 0.5 within 400 ms) → very
   under-gained. Bump P significantly (e.g. 30%), re-fly.
