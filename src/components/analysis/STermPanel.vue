@@ -39,6 +39,7 @@ import {
   sessionTimeRangeFn,
   useSessionRefTime,
 } from '@/lib/sessionTime';
+import { smoothTrace } from '@/lib/displaySmooth';
 import {
   familyForIndex,
   tintTowardFamily,
@@ -283,11 +284,12 @@ const data = computed<AlignedData>(() => {
       new Float32Array(0),
     ] as unknown as AlignedData;
   }
+  const smooth = view.smoothingStrength;
   const series: Float32Array[] = [];
   for (const t of allTraces.value) {
-    series.push(resampleOntoRef(t.entry.log, refTime.value, t.preArr));
-    series.push(resampleOntoRef(t.entry.log, refTime.value, t.postArr));
-    series.push(resampleOntoRef(t.entry.log, refTime.value, t.factorArr));
+    series.push(smoothTrace(resampleOntoRef(t.entry.log, refTime.value, t.preArr), smooth));
+    series.push(smoothTrace(resampleOntoRef(t.entry.log, refTime.value, t.postArr), smooth));
+    series.push(smoothTrace(resampleOntoRef(t.entry.log, refTime.value, t.factorArr), smooth));
   }
   return [refTime.value, ...series] as unknown as AlignedData;
 });

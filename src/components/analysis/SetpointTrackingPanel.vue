@@ -24,6 +24,7 @@ import { useSessionStore, type LogState } from '@/stores/session';
 import { useActiveLog } from '@/composables/useActiveLog';
 import { useAlignedTime } from '@/composables/useAlignedTime';
 import { useViewStore, type CursorSample } from '@/stores/view';
+import { smoothTrace } from '@/lib/displaySmooth';
 import { useUPlot } from '@/composables/useUPlot';
 import { useChartPinnedCursor } from '@/composables/useChartPinnedCursor';
 import { useCursorSamples } from '@/composables/useCursorSamples';
@@ -150,10 +151,11 @@ const data = computed<AlignedData>(() => {
   if (!ready.value || refTime.value.length === 0 || allTraces.value.length === 0) {
     return [new Float32Array(0)] as unknown as AlignedData;
   }
+  const smooth = view.smoothingStrength;
   const series: Float32Array[] = [];
   for (const t of allTraces.value) {
-    series.push(resampleOntoRef(t.entry.log, refTime.value, t.setpointArr));
-    series.push(resampleOntoRef(t.entry.log, refTime.value, t.gyroArr));
+    series.push(smoothTrace(resampleOntoRef(t.entry.log, refTime.value, t.setpointArr), smooth));
+    series.push(smoothTrace(resampleOntoRef(t.entry.log, refTime.value, t.gyroArr), smooth));
   }
   return [refTime.value, ...series] as unknown as AlignedData;
 });

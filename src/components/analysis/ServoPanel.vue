@@ -52,6 +52,7 @@ import {
   useSessionRefTime,
 } from '@/lib/sessionTime';
 import { detectSaturation, type SaturationResult } from '@/lib/servoAnalysis';
+import { smoothTrace } from '@/lib/displaySmooth';
 import {
   classifyServos,
   ROLE_LABELS,
@@ -345,10 +346,11 @@ const data = computed<AlignedData>(() => {
   if (!ready.value || refTime.value.length === 0) {
     return [new Float32Array(0)] as unknown as AlignedData;
   }
+  const smooth = view.smoothingStrength;
   const series: Float32Array[] = [];
   for (const t of allTraces.value) {
     for (const a of t.arrs) {
-      series.push(resampleOntoRef(t.entry.log, refTime.value, a));
+      series.push(smoothTrace(resampleOntoRef(t.entry.log, refTime.value, a), smooth));
     }
   }
   return [refTime.value, ...series] as unknown as AlignedData;

@@ -95,6 +95,17 @@ export const useViewStore = defineStore('view', () => {
    *  user-tunable later. M1.7 wires the eviction policy itself. */
   const fieldCacheBytesCap = ref<number>(DEFAULT_FIELD_CACHE_BYTES);
 
+  /** Global display-smoothing strength, 0..4 (raw → max). DISPLAY-ONLY
+   *  — panels apply `smoothTrace()` from `lib/displaySmooth` to the
+   *  render copy of raw time-domain traces; it never touches the
+   *  analysis layer (see the displaySmooth module header + the
+   *  confidence-scoring cardinal rule). Session-scoped. */
+  const smoothingStrength = ref<number>(0);
+
+  function setSmoothingStrength(level: number) {
+    smoothingStrength.value = Math.max(0, Math.min(4, Math.round(level)));
+  }
+
   function setTab(id: AnalysisTab) {
     activeTab.value = id;
   }
@@ -218,6 +229,8 @@ export const useViewStore = defineStore('view', () => {
     scrubStart,
     scrubEnd,
     fieldCacheBytesCap,
+    smoothingStrength,
+    setSmoothingStrength,
     setTab,
     setCursor,
     pinCursorAt,

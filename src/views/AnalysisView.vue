@@ -23,7 +23,7 @@
 // preserved: only fields that are actually in `fields_present` get
 // hydrated, just eagerly rather than on tab mount.
 
-import { watchEffect } from 'vue';
+import { computed, watchEffect } from 'vue';
 import { storeToRefs } from 'pinia';
 
 import { useSessionStore } from '@/stores/session';
@@ -33,6 +33,7 @@ import TabBar from '@/components/analysis/TabBar.vue';
 import LogRoster from '@/components/LogRoster.vue';
 import TimeBar from '@/components/analysis/TimeBar.vue';
 import CursorReadout from '@/components/analysis/CursorReadout.vue';
+import SmoothingControl from '@/components/SmoothingControl.vue';
 import TrackingTab from '@/components/analysis/TrackingTab.vue';
 import ServosTab from '@/components/analysis/ServosTab.vue';
 import AirspeedPanel from '@/components/analysis/AirspeedPanel.vue';
@@ -48,6 +49,16 @@ const view = useViewStore();
 const { activeTab } = storeToRefs(view);
 
 const session = useSessionStore();
+
+/** Tabs whose panels render raw time-domain traces that the global
+ *  smoothing slider can act on. Summary / Spectrum / TPA / Airspeed /
+ *  Recommend are excluded — their charts are frequency-domain,
+ *  scatter, fit-comparison, or non-chart, where boxcar smoothing is
+ *  meaningless or misleading. */
+const SMOOTHABLE_TABS = new Set(['tracking', 'servos', 'spa', 'sterm', 'step']);
+const showSmoothing = computed(
+  () => session.logs.size >= 1 && SMOOTHABLE_TABS.has(activeTab.value),
+);
 
 /** logIds we've already kicked eager hydration for. Module-scope so
  *  re-mounting AnalysisView (tab navigation, etc.) doesn't re-hydrate
@@ -96,6 +107,7 @@ watchEffect(() => {
     <div class="mt-2.5">
       <TimeBar />
       <CursorReadout />
+      <SmoothingControl v-if="showSmoothing" />
     </div>
 
     <div class="mt-4">

@@ -19,7 +19,9 @@ import { computed, onMounted, ref, watch } from 'vue';
 import type { AlignedData, Options } from 'uplot';
 
 import { useActiveLog } from '@/composables/useActiveLog';
+import { useViewStore } from '@/stores/view';
 import { useUPlot } from '@/composables/useUPlot';
+import { smoothTrace } from '@/lib/displaySmooth';
 import { detectManeuvers, setpointVelocity } from '@/lib/maneuverDetect';
 import {
   analyzeFFAxis,
@@ -93,6 +95,7 @@ const axisSpec = computed(() => AXES[selectedAxis.value]);
 
 const logStore = useActiveLog();
 const { time, fields, hydrating } = logStore;
+const view = useViewStore();
 
 // Maneuver detection needs all three setpoint axes (cross-axis
 // classification); FF analysis of the selected axis needs that axis's
@@ -201,7 +204,13 @@ const data = computed<AlignedData>(() => {
   if (t.length === 0 || vel.length === 0 || !fterm || !pterm) {
     return [new Float32Array(0), new Float32Array(0), new Float32Array(0), new Float32Array(0)] as unknown as AlignedData;
   }
-  return [t, vel, fterm, pterm] as unknown as AlignedData;
+  const s = view.smoothingStrength;
+  return [
+    t,
+    smoothTrace(vel, s),
+    smoothTrace(fterm, s),
+    smoothTrace(pterm, s),
+  ] as unknown as AlignedData;
 });
 
 const opts = computed<Options>(() => ({
