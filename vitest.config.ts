@@ -12,6 +12,12 @@ export default mergeConfig(
       // and crashes every file after the first with
       // `Cannot read properties of undefined (reading 'config')`.
       // Single-file runs work; multi-file runs need forks.
+      //
+      // NOTE: this config-level setting is NOT reliably honored when
+      // vitest is launched via the `test:unit` / `test:wasm` npm
+      // scripts (still crashed 2026-05-20). The actual enforcement is
+      // the explicit `--pool=forks` CLI flag in those package.json
+      // scripts — keep both; this line documents intent.
       pool: 'forks',
       // `include` is broad so the `test:wasm` script's positional filter
       // (`vitest run tests/wasm-binding`) actually matches files. The

@@ -14,8 +14,8 @@
     "preview": "vite preview",
     "tauri:dev": "npm run wasm:build && tauri dev",
     "tauri:build": "npm run wasm:build && tauri build",
-    "test:unit": "vitest run --exclude='tests/wasm-binding/**' --exclude='**/node_modules/**' --exclude='**/.git/**'",
-    "test:wasm": "npm run wasm:build:node && vitest run tests/wasm-binding",
+    "test:unit": "vitest run --pool=forks --exclude='tests/wasm-binding/**' --exclude='**/node_modules/**' --exclude='**/.git/**'",
+    "test:wasm": "npm run wasm:build:node && vitest run --pool=forks tests/wasm-binding",
     "corpus:validate": "cargo run --release --manifest-path crates/validate-parser/Cargo.toml -- --manifest tests/corpus/manifest.yaml",
     "corpus:validate:private": "cargo run --release --manifest-path crates/validate-parser/Cargo.toml -- --manifest tests/corpus-private/manifest.yaml"
   },
