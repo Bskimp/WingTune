@@ -42,6 +42,29 @@ describe('computeStepResponse', () => {
     return out;
   }
 
+  // Synthetic underdamped 2nd-order plant: ÿ + 2ζωn·ẏ + ωn²·y = ωn²·u.
+  // Semi-implicit Euler integration — independent code from the Wiener
+  // deconvolution under test. Continuous-time closed forms:
+  //   overshoot Mp = exp(-ζπ/√(1-ζ²)),  peak time tp = π/(ωn√(1-ζ²)).
+  function simulateSecondOrder(
+    setpoint: Float32Array,
+    sampleRate: number,
+    omegaN: number,
+    zeta: number,
+  ): Float32Array {
+    const out = new Float32Array(setpoint.length);
+    const dt = 1 / sampleRate;
+    let y = 0;
+    let yd = 0;
+    for (let i = 0; i < setpoint.length; i++) {
+      const ydd = omegaN * omegaN * (setpoint[i] - y) - 2 * zeta * omegaN * yd;
+      yd += ydd * dt;
+      y += yd * dt;
+      out[i] = y;
+    }
+    return out;
+  }
+
   test('insufficient samples returns empty result with numSegments=0', () => {
     const sr = 1000;
     const r = computeStepResponse(
@@ -133,5 +156,48 @@ describe('computeStepResponse', () => {
     });
     expect(r.peakTimeMs).toBeGreaterThan(0);
     expect(r.peakTimeMs).toBeLessThanOrEqual(300);
+  });
+
+  test('recovers overshoot of a synthetic underdamped 2nd-order system', () => {
+    // A first-order plant only ever approaches 1.0 asymptotically, so it
+    // never exercises peakAmplitude > 1.0 — the overshoot diagnostic the
+    // Step tab exists for. An underdamped 2nd-order plant overshoots by a
+    // known amount, covering that path and guarding the Wiener
+    // deconvolution's ability to preserve mid-band ringing.
+    const sr = 1000;
+    const n = 16384;
+    const omegaN = 40; // rad/s
+    const zeta = 0.3;  // → Mp ≈ 0.372, peak ≈ 1.372, tp ≈ 82 ms
+    const setpoint = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      setpoint[i] = Math.floor(i / 400) % 2 === 0 ? 100 : -100;
+    }
+    const gyro = simulateSecondOrder(setpoint, sr, omegaN, zeta);
+
+    const r = computeStepResponse(setpoint, gyro, sr, {
+      segmentLen: 2048,
+      windowSec: 0.4,
+      setpointPeakThreshold: 10,
+      peakWindowMs: 400,
+    });
+
+    const mp = Math.exp((-zeta * Math.PI) / Math.sqrt(1 - zeta * zeta));
+    const expectedPeak = 1 + mp; // ≈ 1.372
+    const tpMs = (Math.PI / (omegaN * Math.sqrt(1 - zeta * zeta))) * 1000; // ≈ 82 ms
+
+    expect(r.numSegments).toBeGreaterThan(0);
+    // Load-bearing assertion: a genuine overshoot is detected. A
+    // first-order plant can never satisfy this.
+    expect(r.peakAmplitude).toBeGreaterThan(1.08);
+    // ...and it lands near the closed-form overshoot. The band absorbs
+    // Euler discretization + Wiener deconvolution noise.
+    expect(r.peakAmplitude).toBeGreaterThan(expectedPeak - 0.25);
+    expect(r.peakAmplitude).toBeLessThan(expectedPeak + 0.25);
+    // Settles back toward 1.0.
+    expect(r.finalValue).toBeGreaterThan(0.7);
+    expect(r.finalValue).toBeLessThan(1.3);
+    // Peak occurs near the closed-form peak time, not at the window edge.
+    expect(r.peakTimeMs).toBeGreaterThan(tpMs - 50);
+    expect(r.peakTimeMs).toBeLessThan(tpMs + 80);
   });
 });
