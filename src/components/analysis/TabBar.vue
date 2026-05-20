@@ -36,7 +36,7 @@ const BASE_TABS: TabSpec[] = [
   { id: 'spa',      label: 'SPA' },
   { id: 'sterm',    label: 'S-Term' },
   { id: 'spectrum', label: 'Spectrum' },
-  { id: 'step',     label: 'Step' },
+  { id: 'step',     label: 'Step · FF' },
 ];
 
 const recCount = computed(() => {

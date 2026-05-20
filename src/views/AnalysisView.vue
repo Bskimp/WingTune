@@ -40,7 +40,7 @@ import TpaCurvePanel from '@/components/analysis/TpaCurvePanel.vue';
 import SpaPanel from '@/components/analysis/SpaPanel.vue';
 import STermPanel from '@/components/analysis/STermPanel.vue';
 import SpectrumPanel from '@/components/analysis/SpectrumPanel.vue';
-import StepResponsePanel from '@/components/analysis/StepResponsePanel.vue';
+import StepTab from '@/components/analysis/StepTab.vue';
 import RecommendTab from '@/components/analysis/RecommendTab.vue';
 import CapabilitySummary from '@/components/CapabilitySummary.vue';
 
@@ -107,7 +107,7 @@ watchEffect(() => {
       <SpaPanel v-else-if="activeTab === 'spa'" />
       <STermPanel v-else-if="activeTab === 'sterm'" />
       <SpectrumPanel v-else-if="activeTab === 'spectrum'" />
-      <StepResponsePanel v-else-if="activeTab === 'step'" />
+      <StepTab v-else-if="activeTab === 'step'" />
       <RecommendTab v-else-if="activeTab === 'recommend'" />
     </div>
   </div>

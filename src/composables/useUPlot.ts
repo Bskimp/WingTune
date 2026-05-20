@@ -53,6 +53,9 @@ export interface UseUPlotHandle {
   setCursorAtTime(t: number | null): void;
   /** Reset x-scale to the data's natural range. */
   resetZoom(): void;
+  /** Zoom the x-scale to an explicit [min, max] range. No-op if the
+   *  range is degenerate or no plot exists. */
+  zoomToRange(min: number, max: number): void;
   /** Force a redraw — useful when external state changes (e.g. the
    *  pinned cursor overlay) need uPlot to re-paint its own layers. */
   redraw(): void;
@@ -151,6 +154,11 @@ export function useUPlot({ target, data, opts }: UseUPlotArgs): UseUPlotHandle {
       const xs = plot.data[0];
       if (!xs || xs.length < 2) return;
       plot.setScale('x', { min: xs[0] as number, max: xs[xs.length - 1] as number });
+    },
+    zoomToRange(min, max) {
+      if (!plot) return;
+      if (!(max > min)) return;
+      plot.setScale('x', { min, max });
     },
     redraw() {
       plot?.redraw(false, true);

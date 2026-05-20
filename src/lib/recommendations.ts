@@ -48,6 +48,10 @@ import {
   servoAsymmetryRecommender,
   servoAsymmetryRequiredFields,
 } from '@/lib/recommenders/servoAsymmetry';
+import {
+  ffEffectivenessRecommender,
+  ffEffectivenessRequiredFields,
+} from '@/lib/recommenders/ffEffectiveness';
 
 /** UI severity — the "should I care" axis, distinct from confidence
  *  (the "is this rec trustworthy" axis). A high-severity low-
@@ -136,6 +140,7 @@ export const ALL_RECOMMENDER_REQUIRED_FIELDS: readonly string[] = [
   ...tpaCurveRequiredFields,
   ...inputChainRequiredFields,
   ...servoAsymmetryRequiredFields,
+  ...ffEffectivenessRequiredFields,
 ];
 
 export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
@@ -148,6 +153,7 @@ export function gatherRecommendations(args: RecommenderArgs): Recommendation[] {
   for (const rec of tpaCurveRecommender(args)) recs.push(rec);
   for (const rec of inputChainRecommender(args)) recs.push(rec);
   for (const rec of servoAsymmetryRecommender(args)) recs.push(rec);
+  for (const rec of ffEffectivenessRecommender(args)) recs.push(rec);
   // future: stepResponseOvershoot, servoSaturation, … each just appended here.
   return recs;
 }
