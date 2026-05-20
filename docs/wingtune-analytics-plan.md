@@ -21,8 +21,17 @@ don't re-litigate it later.
 4. **M-Pilot — Pilot-input style analysis**
 5. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
    folds into the existing Airspeed panel)
-6. **Craft persistence infrastructure** — needs its own design pass
+6. **M-FilterSim — interactive per-stage filter preview** (simulate
+   the BF filter chain; foundation for the wing filter estimator)
+7. **Craft persistence infrastructure** — needs its own design pass
    before any of the above can have a longitudinal-history feature
+
+**UX / infrastructure follow-ups** (not analytics — surfaced during
+M-FF, 2026-05-19):
+- **App-wide display smoothing** — global raw/smoothed toggle + strength
+  slider.
+- **Tab IA consolidation** — 10 tabs is a lot; collapse the wing-
+  scheduled-gain family into one.
 
 M-FF is first because it has the clearest tuning payoff, it's self-
 contained (no persistence-infra dependency), and FF is genuinely hard
@@ -259,6 +268,121 @@ designed.**
   to every new log of the same craft.
 - Cross-log trend analysis — "your last 5 tune changes show RMS
   90 → 75 → 80 → 65 → 60."
+
+---
+
+## M-FilterSim — interactive per-stage filter preview
+
+**Why:** the Spectrum tab currently shows raw gyro vs full-chain
+filtered gyro — the whole filter chain's net effect. It can't show
+what any *individual* filter stage does, because logs only contain
+raw (`gyroUnfilt`) and full-chain post-filter (`gyroADC`) — BF emits
+no intermediate per-stage signal.
+
+To show per-stage effect, the filter chain has to be **simulated**:
+port BF's filter math to JS, apply it to the raw gyro stage by stage.
+The existing raw/filt/both buttons then become a toggle per stage —
+the displayed "filtered" trace is recomputed from whichever stages
+are enabled. Toggle the dyn-notch and watch that peak reappear;
+toggle a LPF and see the high-frequency rolloff vanish. Directly
+answers "what noise is this filter actually touching."
+
+**The honesty rule:** the simulation is not measured truth. The
+logged `gyroADC` IS ground truth for the actual config. The sim must
+be **validated against it** — apply the simulated *full* chain to raw
+gyro, compare against the logged post-chain. Match → the per-stage
+breakdown is trustworthy. Mismatch → flag it loudly ("sim diverges
+from logged filter output — per-stage view unreliable"). Without that
+check the per-stage spectra are just plausible fiction.
+
+**Data:** `gyroUnfilt[i]` (raw), `gyroADC[i]` (validation ground
+truth), `FilterConfig` from headers (already parsed in `scan.rs` —
+dyn-notch + 4 LPFs + RPM filter). FFT machinery exists in
+`lib/spectrum.ts`.
+
+**Incremental path:**
+1. Port BF biquad (PT1/PT2/PT3) + dynamic notch + RPM filter math to
+   JS. Validate the simulated full chain against logged `gyroADC`.
+   Load-bearing — nothing downstream is trustworthy without this.
+2. Per-stage spectrum display — toggle each filter stage on/off,
+   PSD recomputed from enabled stages.
+3. Interactive cutoff editing — a filter sandbox. Edit a cutoff, see
+   the predicted spectrum + delay budget update live. Preview a
+   config change before flashing + flying.
+
+**Open question — the dynamic notch.** It tracks frequency over time,
+so an exact sim needs the per-sample notch center (logged only under
+some debug modes). A static-center approximation works for stage 1;
+exact tracking is a refinement, not a blocker.
+
+**Relationship to other work:** the simulator is the foundation for
+the deferred **wing filter estimator** (referenced in the dropped
+wind-estimator note below). Build M-FilterSim and the filter
+estimator becomes a much smaller follow-on.
+
+---
+
+## UX / infrastructure follow-ups
+
+Surfaced during M-FF when the feedforward panel's raw setpoint-velocity
+trace rendered as a blocky mess and the 10-tab bar started feeling
+crowded. Neither is analytics — both are presentation/IA.
+
+### App-wide display smoothing
+
+**Why:** the raw derivative on the FF panel (and noisy raw traces
+generally — Tracking, Servos, PID contribution, SPA, S-Term) is hard
+to read on a poorly-tuned or turbulent flight. A global raw/smoothed
+toggle + strength slider lets the user clean up the chart for trend-
+reading, or stay on raw for "is this real signal."
+
+**The hard rule — smoothing is DISPLAY-ONLY.** It must never feed the
+analysis layer. Step peak, RMS error, FF coverage, filter delay are
+all computed from raw Float32 arrays; if a smoothing slider fed those,
+the chart would disagree with its own header numbers and — worse — a
+bad tune could be smoothed into looking fine. Per
+`wingtune-confidence-scoring`, that's a no-go.
+
+**Design:**
+- Global `smoothingStrength` in the view store (0 = raw, N = boxcar
+  width or similar).
+- A display-layer transform applied to the *render copy* of raw
+  traces — never the analysis input. New Float32 arrays per the
+  memory-model cardinal rule.
+- Clear raw/smoothed indication in the UI — smoothing hides real
+  high-frequency problems, which is sometimes the exact thing the
+  user needs to see.
+- **Does NOT apply everywhere.** Spectrum PSD is already a frequency
+  transform; Step is already an average; TPA is a discrete scatter.
+  Applies only to raw time-domain field traces: Tracking, Servos,
+  PID contribution, SPA, S-Term, FF.
+
+**Scope:** a feature slice — touches ~6 panels + the view store +
+wherever the slider lives (header? a settings strip?). Not a
+milestone, but bigger than a drive-by.
+
+Note: the FF panel already smooths its *velocity* display trace
+locally (commit for M-FF) — a derivative is intrinsically noisy and
+needs it regardless. The global feature is for raw field traces.
+
+### Tab IA consolidation
+
+**Why:** the tab bar grew from ~4 (tracking / setpoint / airspeed /
+spectrum) to 10. That's a lot to scan. FF going onto the Step tab
+(Step · FF, double-duty) held the count at 10 rather than 11, but the
+underlying crowding is real.
+
+**Highest-leverage cut:** Airspeed / TPA / SPA / S-Term are all one
+family — wing-specific scheduled-gain analyses (airspeed feeds TPA,
+TPA scales S, SPA gates I). Collapsing those four into a single
+"Scheduling" tab (stacked panels, the way Servos already stacks 3)
+takes the bar 10 → 7.
+
+**Why it's not done inline:** this is an information-architecture
+redesign — tab grouping, possibly a sub-nav within the consolidated
+tab, naming. It interacts with the locked visual direction
+(see `project-direction-c-blueprint` memory). Deserves a deliberate
+design pass, not a mid-milestone edit.
 
 ---
 
