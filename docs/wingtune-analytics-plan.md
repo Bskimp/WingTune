@@ -25,6 +25,11 @@ don't re-litigate it later.
    the BF filter chain; foundation for the wing filter estimator)
 7. **Craft persistence infrastructure** — needs its own design pass
    before any of the above can have a longitudinal-history feature
+8. **Wing-regime spectral batch** — airspeed-binned step response +
+   airspeed×frequency spectrogram (both high-value, reuse existing
+   engines) + low-frequency airframe-mode detection + wavelet / non-
+   stationary spectra (more speculative). From the 2026-05-19
+   PTB-vs-wing discussion.
 
 **UX / infrastructure follow-ups** (not analytics — surfaced during
 M-FF, 2026-05-19):
@@ -319,6 +324,98 @@ exact tracking is a refinement, not a blocker.
 the deferred **wing filter estimator** (referenced in the dropped
 wind-estimator note below). Build M-FilterSim and the filter
 estimator becomes a much smaller follow-on.
+
+---
+
+## Wing-regime spectral batch
+
+From the 2026-05-19 PTB-vs-wing discussion. PIDtoolbox conflates two
+things: universal signal processing (transfers to wings unchanged) and
+a quad-specific interpretive overlay (does not). WingTune already
+rebuilt most of the overlay — wing-scaled step metrics, airspeed-based
+TPA physics, SPA event detection, servo-lag decomposition. Four gaps
+remain, each about giving an analysis a wing-correct *axis* or *band*.
+
+Items 2-4 share short-time-FFT (spectrogram) machinery — build one and
+the rest get cheaper. Items 1-2 are the high-value pair: both reuse
+engines that already exist (M-Step, M4 spectrum, M3 airspeed) and both
+turn TPA-curve guessing into measurement. Items 3-4 are more
+speculative — capture now, prioritise later.
+
+### 1. Step response binned by airspeed
+
+**Why:** M-Step runs one whole-log Wiener deconvolution. On a wing the
+plant scales with dynamic pressure (q = ½ρV²) — a tune crisp at cruise
+is sluggish slow / twitchy fast, and one averaged step response hides
+that. Binning by airspeed shows plant variation across the envelope,
+and that variation *is* the TPA curve being tuned.
+
+- **Data:** existing M-Step inputs (`setpoint[i]`, `gyroADC[i]`) + the
+  M3 airspeed estimate.
+- **Approach:** reuse `computeStepResponse`; segment the log into 4-6
+  airspeed bins, deconvolve per bin. Pairs with M-FF maneuver
+  detection for clean per-bin excitation.
+- **Output:** small-multiples (step response per bin) or an overlay;
+  surfaces peak / latency drift vs airspeed.
+- **Open question:** sample sufficiency — a short flight won't
+  populate the fast bins. Grey out under-sampled bins.
+- **Note:** highest-leverage item — ties M-Step + M3 + M5 together,
+  all already built.
+
+### 2. Airspeed × frequency spectrogram
+
+**Why:** M4 Spectrum is a 1-D whole-log PSD. Wing resonances,
+control-surface buzz, flutter precursors *onset at a speed* — a
+whole-log PSD smears that out. The quad throttle×frequency view
+doesn't help (throttle barely tracks gyro noise on a vibration-
+isolated tractor wing); airspeed is the dimension the plant scales
+with.
+
+- **Data:** `gyroADC[i]` + M3 airspeed estimate. FFT machinery in
+  `lib/spectrum.ts`.
+- **Approach:** STFT — short windows along the log, each → a PSD
+  column; sort / bin columns by airspeed instead of time.
+- **Output:** per-axis heatmap (x = airspeed, y = frequency, colour =
+  power). The primary spectral view for wings, beside the whole-log
+  PSD.
+- **Open question:** sparse fast-end airspeed data → sparse columns.
+
+### 3. Low-frequency airframe-mode detection
+
+**Why:** nothing targets the 0.05-3 Hz band where wing airframe modes
+live — short-period (~0.5-2 Hz), dutch roll (~0.2-1 Hz), phugoid
+(~0.02-0.07 Hz). A peak there is an airframe dynamic mode (CG, tail
+volume, dihedral diagnostic), not noise. PTB points at 30-90 Hz; on a
+wing that band is structural and the interesting band is ~100× lower.
+
+- **Data:** `gyroADC[i]` catches short-period + dutch roll; phugoid is
+  a speed / altitude exchange mode barely visible on the gyro — needs
+  airspeed + altitude.
+- **Approach:** low-frequency PSD + peak detection below ~3 Hz.
+  Phugoid needs a window down to ~0.02 Hz → 100 s+ of continuous
+  flight to resolve; flag when the log is too short.
+- **Output:** detected modes (frequency + rough damping), labelled by
+  likely mode. A panel or a Spectrum sub-view.
+- **Open question:** damping from a log is noisy and mode labelling
+  needs heuristics; phugoid detection is log-length-limited — likely
+  "best effort."
+
+### 4. Wavelet / non-stationary spectral analysis
+
+**Why:** M4 uses Welch's method — averaged periodograms, a stationary
+assumption. Correct for motor harmonics; wrong for wing disturbances,
+which are mostly non-stationary (discrete gusts, a one-off buffet, a
+flutter-onset transient). Averaging smears those into the noise floor;
+a time-localised transform keeps "broadband transient at t = 14.2 s."
+
+- **Data:** `gyroADC[i]`.
+- **Approach:** STFT scalogram first (reuses FFT machinery, shares
+  code with item 2); evaluate a continuous wavelet transform later if
+  the low-freq / time tradeoff matters.
+- **Output:** a time×frequency scalogram — complements the stationary
+  PSD, does not replace it.
+- **Open question:** is a CWT worth the extra code over an STFT?
+  Start STFT, decide later.
 
 ---
 
