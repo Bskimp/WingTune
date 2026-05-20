@@ -422,15 +422,24 @@ const multiLogNote = computed(() => {
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
         <div v-if="ready" class="flex gap-3 items-baseline">
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Percentage of the flight where the SPA gate was active — briefly attenuating the I-term to prevent wind-up during fast setpoint changes."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">gate</div>
             <div class="font-mono text-[13px]" :class="gateToneClass">{{ gatePctText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="The lowest SPA multiplier reached. 1.00 = SPA never attenuated the I-term; lower = more I-term gating at peak (0 = I fully cut)."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">min SPA</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ minSpaText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Count of detected wind-up events (I-term climbing while the gate is floored) plus bounce-back events (I-term overshooting after stick release). Frequent events suggest SPA threshold / I-decay tuning."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">events</div>
             <div class="font-mono text-[13px]" :class="eventToneClass">{{ eventCountText }}</div>
           </div>

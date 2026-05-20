@@ -393,11 +393,17 @@ const peakToneClass = computed(() => {
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
         <div v-if="firstResult && ready" class="flex gap-3 items-baseline">
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Peak of the step response within the first 400 ms (wing-scaled, not global max). 100% = ideal tracking; >110% = overshoot; >130% = hard overshoot / ringing."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">peak</div>
             <div class="font-mono text-[13px]" :class="peakToneClass">{{ peakPctText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Time for the response to first cross 0.5 (50% of the unit-step target), in ms. Lower = the controller starts responding sooner. NaN if it never reaches 0.5 in the window."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">latency 50%</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ latencyText }}</div>
           </div>

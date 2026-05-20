@@ -310,15 +310,24 @@ const multiLogNote = computed(() => {
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
         <div v-if="stats" class="flex gap-3 items-baseline">
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Root-mean-square of (gyro − setpoint) across the flight, in deg/s — the typical tracking error. Lower = the airframe follows the commanded rate more closely."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">RMS err</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ stats.rmsError.toFixed(2) }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="The single worst tracking error (gyro vs setpoint), in deg/s — the moment the airframe fell furthest behind the command."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">peak err</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ stats.peakError.toFixed(2) }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Number of samples in the comparison — the length of the log's main-frame data on this axis."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">samples</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ stats.sampleCount.toLocaleString() }}</div>
           </div>

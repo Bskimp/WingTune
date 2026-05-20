@@ -335,23 +335,38 @@ const multiLogNote = computed(() => {
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
         <div v-if="activeFit" class="flex gap-3 items-baseline">
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="BASIC-model throttle-to-airspeed lag: how long after a throttle change the modelled airspeed responds. A fitted tpa_speed_basic CLI parameter."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">delay ms</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(activeFit.params.delayMs) }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="How much of the modelled speed change the fit attributes to climb/descent (gravity) versus thrust. A fitted tpa_speed_basic CLI parameter."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">gravity %</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(activeFit.params.gravityPct) }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="The model's max-voltage reference parameter, shown x100 (BF's integer CLI encoding — divide by 100 for the real value). A fitted tpa_speed_basic CLI parameter."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">max V&times;100</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ Math.round(activeFit.params.maxVoltageX100) }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Fit quality, 0-1: the fraction of GPS-speed variance the model explains. Above 0.7 = reliable fit (green rec with paste-ready CLI); below 0.7 = drifty (analysis-only, no CLI)."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">R&sup2;</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ activeFit.rSquared.toFixed(3) }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Root-mean-square residual in m/s — the model's average airspeed prediction error versus GPS 3D speed."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">RMS</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ activeFit.rmsResidual.toFixed(1) }}</div>
           </div>

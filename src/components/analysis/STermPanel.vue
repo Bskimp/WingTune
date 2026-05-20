@@ -462,15 +462,24 @@ const multiLogNote = computed(() => {
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
         <div v-if="ready" class="flex gap-3 items-baseline">
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Average attenuation TPA applied to the S-term across the flight, where S was active. 0% = TPA never scaled S down; higher = TPA actively reducing S authority at speed."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">mean atten</div>
             <div class="font-mono text-[13px]" :class="attenToneClass">{{ meanAttenText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="The lowest TPA factor reached — the single most-attenuated moment. 1.00 = TPA never engaged on S; below 1 = S was scaled down that much at peak."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">min factor</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ minFactorText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Percentage of the flight where the S-term was meaningfully active (above the noise threshold) — the fraction of the log this comparison is computed over."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">active</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ activePctText }}</div>
           </div>

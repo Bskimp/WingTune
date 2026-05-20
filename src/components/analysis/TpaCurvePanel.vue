@@ -314,23 +314,38 @@ const rmsTone = computed(() => {
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
         <div v-if="ready" class="flex gap-3 items-baseline">
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Root-mean-square residual of the HYPERBOLIC curve fit. Lower = the fitted curve passes closer through the measured (tpa_arg, tpa_factor) scatter. <0.08 clean / 0.08-0.15 drifty / >0.15 poor fit."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">rms</div>
             <div class="font-mono text-[13px]" :class="rmsTone">{{ rmsText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Fitted curve endpoints: the PID multiplier at low airspeed (thr0) and at full airspeed (thr100). >1 = gain amplification, <1 = attenuation. These map to the tpa_curve_pid_thr0 / pid_thr100 CLI params."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">thr0/thr100</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ pidThr0Text }} / {{ pidThr100Text }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Fitted curvature of the HYPERBOLIC curve between the two endpoints. Maps to the tpa_curve_expo CLI param."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">expo</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ expoText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Number of (tpa_arg, tpa_factor) sample pairs that fed the fit. More samples across a wider airspeed range = a better-constrained curve."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">samples</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ sampleText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="The span of the airspeed argument the flight actually covered. A narrow range leaves the curve under-constrained — fly throttle excursions up to cruise/max to widen it."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">x range</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ xRangeText }}</div>
           </div>

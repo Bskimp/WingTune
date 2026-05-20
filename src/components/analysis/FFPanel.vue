@@ -313,19 +313,31 @@ const isNoisy = computed(() => ffResult.value?.noisy ?? false);
 
       <div class="flex flex-wrap gap-y-1.5 gap-x-3 items-center">
         <div v-if="ready" class="flex gap-3 items-baseline">
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Share of controller output feedforward carried while the stick was moving: |F| / (|F|+|P|). High = FF doing the transient work; low = P carrying it, i.e. FF undergained."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">F coverage</div>
             <div class="font-mono text-[13px]" :style="{ color: VERDICT_COLOR[verdict] }">{{ coverageText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="How many detected maneuvers showed the gyro punching past the setpoint right after the input — the signature of overgained feedforward."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">overshoot</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ overshootText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="Number of fast-input windows auto-detected from the setpoint derivative. FF only produces signal during fast moves, so analysis is scoped to these."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">maneuvers</div>
             <div class="font-mono text-[13px] text-bp-ink">{{ windowText }}</div>
           </div>
-          <div class="text-right">
+          <div
+            class="text-right cursor-help"
+            title="High-frequency jitter in the F-term: RMS(F − smoothed F) / RMS(smoothed F). High = FF amplifying RC/stick noise. Fix is feedforward_smoothing / feedforward_jitter_factor, NOT the FF gain."
+          >
             <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">F noise</div>
             <div class="font-mono text-[13px]" :class="isNoisy ? 'text-bp-warn' : 'text-bp-ink'">{{ noiseText }}</div>
           </div>
