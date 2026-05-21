@@ -8,6 +8,8 @@
 import { defineStore } from 'pinia';
 import { ref, shallowRef } from 'vue';
 
+import { resolveTuneProfile, type TuneProfile } from '@/lib/tuneProfile';
+
 /** One row of the cursor readout strip. Panels push these into the
  *  view store via `useCursorSamples`; the readout aggregates and
  *  renders. Tones map to the design palette — keep in sync with
@@ -25,6 +27,21 @@ export interface CursorSample {
  *  is deferred to M1.7 (multi-log multiplies pressure); for M1.3 this is
  *  a documented constant that `view.ts` exposes for later use. */
 export const DEFAULT_FIELD_CACHE_BYTES = 256 * 1024 * 1024;
+
+/** localStorage key for the persisted tune-style profile (M-Style) —
+ *  the first (and currently only) persisted view setting. */
+const TUNE_PROFILE_STORAGE_KEY = 'wingtune.tuneProfile';
+
+/** Read the persisted tune profile, defaulting to Sport. Guards a
+ *  missing / throwing localStorage (test env, browser privacy mode). */
+function loadTuneProfile(): TuneProfile {
+  if (typeof localStorage === 'undefined') return resolveTuneProfile(undefined);
+  try {
+    return resolveTuneProfile(localStorage.getItem(TUNE_PROFILE_STORAGE_KEY));
+  } catch {
+    return resolveTuneProfile(undefined);
+  }
+}
 
 /** Top-level analysis tab. Order matches the tab bar. Recommend stays
  *  hidden until M2+ analytics emit anything (per
@@ -104,6 +121,25 @@ export const useViewStore = defineStore('view', () => {
 
   function setSmoothingStrength(level: number) {
     smoothingStrength.value = Math.max(0, Math.min(4, Math.round(level)));
+  }
+
+  /** Active tune-style profile (M-Style) — Cruise / Sport / 3D. Shifts
+   *  the recommenders' thresholds + targets; default Sport === today's
+   *  behaviour. The FIRST persisted view setting: seeded from
+   *  localStorage on store init, written back on change so the choice
+   *  survives a reload (a per-user preference, unlike the session-scoped
+   *  settings above). */
+  const tuneProfile = ref<TuneProfile>(loadTuneProfile());
+
+  function setTuneProfile(profile: TuneProfile) {
+    tuneProfile.value = profile;
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(TUNE_PROFILE_STORAGE_KEY, profile);
+    } catch {
+      // Best-effort — a blocked localStorage just means the choice
+      // doesn't survive reload; the in-session value still works.
+    }
   }
 
   function setTab(id: AnalysisTab) {
@@ -231,6 +267,8 @@ export const useViewStore = defineStore('view', () => {
     fieldCacheBytesCap,
     smoothingStrength,
     setSmoothingStrength,
+    tuneProfile,
+    setTuneProfile,
     setTab,
     setCursor,
     pinCursorAt,

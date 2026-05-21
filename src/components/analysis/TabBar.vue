@@ -51,6 +51,7 @@ const recCount = computed(() => {
     gpsTimeSec: gpsTimeSec.value,
     filterConfig: filterConfig.value,
     headerParams: r.header_params,
+    profile: view.tuneProfile,
   }).length;
 });
 

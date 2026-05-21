@@ -27,11 +27,13 @@
 import { computed, ref, watch } from 'vue';
 
 import { useSessionStore } from '@/stores/session';
+import { useViewStore } from '@/stores/view';
 import { evaluateModules } from '@/lib/capabilityPredicates';
 import { gatherRecommendations, type Severity } from '@/lib/recommendations';
 import RecommendList from '@/components/analysis/RecommendList.vue';
 
 const session = useSessionStore();
+const view = useViewStore();
 
 /** Logs in insertion order (matches roster ordering). Recomputed
  *  reactively when logs are added or removed. */
@@ -81,6 +83,7 @@ const recs = computed(() => {
     gpsTimeSec: log.gpsTimeSec,
     filterConfig: log.scanReport.filter_config,
     headerParams: log.scanReport.header_params,
+    profile: view.tuneProfile,
   });
 });
 

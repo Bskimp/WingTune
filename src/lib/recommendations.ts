@@ -16,6 +16,7 @@
 import type { CapabilityReport, FilterConfig } from '@/lib/wasmBridge';
 import type { ConfidenceLevel } from '@/lib/confidence';
 import type { ModuleReport } from '@/lib/capabilityPredicates';
+import type { TuneProfile } from '@/lib/tuneProfile';
 import {
   debugModeRecommender,
   debugModeRequiredFields,
@@ -132,6 +133,11 @@ export interface RecommenderArgs {
    *  value BF wrote into the log. The airspeed-basic recommender reads
    *  `tpa_speed_max_voltage` from here to pin its fixed model input. */
   headerParams: Record<string, string>;
+  /** Active tune-style profile (M-Style) — Cruise / Sport / 3D.
+   *  Recommenders with style-sensitive thresholds read them from this
+   *  profile instead of a file-scope constant. Slice 1 plumbs it
+   *  through; recommenders are migrated to consume it in Slice 2. */
+  profile: TuneProfile;
 }
 
 export type Recommender = (args: RecommenderArgs) => Recommendation[];
