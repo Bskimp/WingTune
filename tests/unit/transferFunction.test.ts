@@ -158,6 +158,50 @@ describe('estimateTransferFunction', () => {
       }),
     ).toThrow(/power of 2/);
   });
+
+  test('regions restrict the estimate to the given spans', () => {
+    // First 40k samples: a clean first-order system. The remaining 60k:
+    // output is independent noise (the wing sat in calm cruise).
+    const xClean = whiteNoise(40_000, 20);
+    const yClean = onePoleLowpass(xClean, alphaForCutoff(10, FS));
+    const x = new Float32Array(100_000);
+    const y = new Float32Array(100_000);
+    x.set(xClean, 0);
+    x.set(whiteNoise(60_000, 21), 40_000);
+    y.set(yClean, 0);
+    y.set(whiteNoise(60_000, 22), 40_000);
+
+    // Whole-flight: the uncorrelated tail drags coherence down.
+    const whole = estimateTransferFunction(x, y, FS);
+    // Restricted to the clean span: coherence stays high.
+    const region = estimateTransferFunction(x, y, FS, { regions: [[0, 40_000]] });
+
+    const loBin = binAt(5, region.segmentLen, FS);
+    expect(region.coherence[loBin]).toBeGreaterThan(0.9);
+    expect(region.coherence[loBin]).toBeGreaterThan(whole.coherence[loBin]);
+    expect(region.numSegments).toBeLessThan(whole.numSegments);
+  });
+
+  test('regions shorter than one segment yield no estimate', () => {
+    const x = whiteNoise(100_000, 23);
+    const y = onePoleLowpass(x, alphaForCutoff(10, FS));
+    const tf = estimateTransferFunction(x, y, FS, { regions: [[0, 500]] });
+    expect(tf.numSegments).toBe(0);
+  });
+
+  test('multiple regions accumulate across non-contiguous spans', () => {
+    const x = whiteNoise(120_000, 24);
+    const y = onePoleLowpass(x, alphaForCutoff(10, FS));
+    const oneSpan = estimateTransferFunction(x, y, FS, { regions: [[0, 30_000]] });
+    const twoSpans = estimateTransferFunction(x, y, FS, {
+      regions: [
+        [0, 30_000],
+        [60_000, 90_000],
+      ],
+    });
+    // Two equal spans → roughly double the segment count of one.
+    expect(twoSpans.numSegments).toBeGreaterThan(oneSpan.numSegments * 1.5);
+  });
 });
 
 describe('estimateBandwidth', () => {

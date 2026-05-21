@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // Servos tab — ServoPanel (multi-trace + saturation strips +
 // classified role labels), InputChainPanel (M-Servo input-chain
-// lag breakdown), plus an honest "what's coming" note for the
-// remaining classifier work.
+// lag breakdown), AirframeBandwidthPanel (M-Servo-2 frequency-
+// resolved servo→gyro transfer function), ServoAsymmetryPanel, plus
+// an honest "what's coming" note for the remaining classifier work.
 
 import ServoPanel from '@/components/analysis/ServoPanel.vue';
 import InputChainPanel from '@/components/analysis/InputChainPanel.vue';
+import AirframeBandwidthPanel from '@/components/analysis/AirframeBandwidthPanel.vue';
 import ServoAsymmetryPanel from '@/components/analysis/ServoAsymmetryPanel.vue';
 </script>
 
@@ -13,6 +15,7 @@ import ServoAsymmetryPanel from '@/components/analysis/ServoAsymmetryPanel.vue';
   <div class="flex flex-col gap-2.5">
     <ServoPanel />
     <InputChainPanel />
+    <AirframeBandwidthPanel />
     <ServoAsymmetryPanel />
 
     <div

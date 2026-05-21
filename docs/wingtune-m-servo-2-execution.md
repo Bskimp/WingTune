@@ -36,7 +36,15 @@ log (servo PWM + gyro) — no debug mode, no special flight required:
   (H(f) = Sxy/Sxx, magnitude/dB/phase, coherence γ²) +
   `estimateBandwidth` (−3 dB rolloff vs the low-freq gain plateau,
   coherence-gated, returns `trustworthy`). 13 unit tests.
-- ⬜ Slice 2 — airframe-bandwidth Bode panel.
+- ✅ **Slice 2** — `AirframeBandwidthPanel.vue` shipped 2026-05-21.
+  Per-axis Bode panel on the Servos tab: |H(f)| dB + coherence vs log
+  frequency, −3 dB rolloff marked, low-coherence spans greyed.
+  Resolved open question 1 — `estimateTransferFunction` gained an
+  optional `regions` param so the estimate runs over M-FF maneuver
+  windows (each padded ±1 s and merged) when the flight has enough
+  maneuver coverage, falling back to whole-flight otherwise; segments
+  never straddle a region boundary so non-contiguous spans introduce
+  no join discontinuity. 3 more unit tests for `regions`.
 - ⬜ Slice 3 — `lib/servoHunt.ts`.
 - ⬜ Slice 4 — per-servo hunt indicator UI.
 

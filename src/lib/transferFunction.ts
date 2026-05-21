@@ -68,6 +68,12 @@ export interface TransferFunctionOptions {
   segmentLen?: number;
   /** Fractional overlap between segments, [0, 1). Default 0.5. */
   overlap?: number;
+  /** Optional [startIdx, endIdx) sample ranges to restrict the Welch
+   *  estimate to. A segment never straddles a range boundary, so the
+   *  ranges can be NON-contiguous flight spans (e.g. M-FF maneuver
+   *  windows) with no join discontinuity — the estimator simply skips
+   *  the gaps. Omitted / empty → the whole signal. */
+  regions?: ReadonlyArray<readonly [number, number]>;
 }
 
 /** Welch-averaged transfer function H(f) = Sxy/Sxx and coherence
@@ -135,36 +141,46 @@ export function estimateTransferFunction(
   const yRe = new Float32Array(segmentLen);
   const yIm = new Float32Array(segmentLen);
 
+  // Whole signal unless explicit regions were given.
+  const regions: ReadonlyArray<readonly [number, number]> =
+    options.regions && options.regions.length > 0
+      ? options.regions
+      : [[0, x.length]];
+
   let numSegments = 0;
-  for (let start = 0; start + segmentLen <= x.length; start += step) {
-    // Per-segment mean removal — measure dynamics, not DC trim.
-    let xMean = 0;
-    let yMean = 0;
-    for (let i = 0; i < segmentLen; i++) {
-      xMean += x[start + i];
-      yMean += y[start + i];
-    }
-    xMean /= segmentLen;
-    yMean /= segmentLen;
+  for (const region of regions) {
+    const lo = Math.max(0, Math.trunc(region[0]));
+    const hi = Math.min(x.length, Math.trunc(region[1]));
+    for (let start = lo; start + segmentLen <= hi; start += step) {
+      // Per-segment mean removal — measure dynamics, not DC trim.
+      let xMean = 0;
+      let yMean = 0;
+      for (let i = 0; i < segmentLen; i++) {
+        xMean += x[start + i];
+        yMean += y[start + i];
+      }
+      xMean /= segmentLen;
+      yMean /= segmentLen;
 
-    for (let i = 0; i < segmentLen; i++) {
-      const w = window[i];
-      xRe[i] = (x[start + i] - xMean) * w;
-      xIm[i] = 0;
-      yRe[i] = (y[start + i] - yMean) * w;
-      yIm[i] = 0;
-    }
-    fftInPlace(xRe, xIm);
-    fftInPlace(yRe, yIm);
+      for (let i = 0; i < segmentLen; i++) {
+        const w = window[i];
+        xRe[i] = (x[start + i] - xMean) * w;
+        xIm[i] = 0;
+        yRe[i] = (y[start + i] - yMean) * w;
+        yIm[i] = 0;
+      }
+      fftInPlace(xRe, xIm);
+      fftInPlace(yRe, yIm);
 
-    // Sxy = conj(X) * Y = (xRe - i·xIm)(yRe + i·yIm).
-    for (let i = 0; i < numBins; i++) {
-      sxx[i] += xRe[i] * xRe[i] + xIm[i] * xIm[i];
-      syy[i] += yRe[i] * yRe[i] + yIm[i] * yIm[i];
-      sxyRe[i] += xRe[i] * yRe[i] + xIm[i] * yIm[i];
-      sxyIm[i] += xRe[i] * yIm[i] - xIm[i] * yRe[i];
+      // Sxy = conj(X) * Y = (xRe - i·xIm)(yRe + i·yIm).
+      for (let i = 0; i < numBins; i++) {
+        sxx[i] += xRe[i] * xRe[i] + xIm[i] * xIm[i];
+        syy[i] += yRe[i] * yRe[i] + yIm[i] * yIm[i];
+        sxyRe[i] += xRe[i] * yRe[i] + xIm[i] * yIm[i];
+        sxyIm[i] += xRe[i] * yIm[i] - xIm[i] * yRe[i];
+      }
+      numSegments++;
     }
-    numSegments++;
   }
 
   for (let i = 0; i < numBins; i++) {
