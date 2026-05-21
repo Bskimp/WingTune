@@ -119,14 +119,16 @@ export type ResolveResult =
 //   · axisS[i] (main-frame) — single-source USE_WING field; equivalent
 //                           to S_TERM channel 2*axis+1 (post-TPA s-term)
 //
-// HEADS-UP: our local `blackbox-log` parser's
-// `types/data/Betaflight/2026.6/debug_mode.yaml` does NOT yet include
-// SPA / WING_SETPOINT / S_TERM in its enum — those merged upstream but
-// our fork's YAML is stale. Until that's fixed, the parser will
-// report `debug_mode = null` for logs that use these modes, and the
-// registry will return `missing` for everything below. The fix is
-// trivial (add the enum entries) but lives in the blackbox-log
-// repo, not WingTune. Tracked as a follow-up slice.
+// PARSER NOTE: the `blackbox-log` fork's
+// `types/data/Betaflight/{2026.6,4.6}/debug_mode.yaml` DOES carry the
+// TPA / SPA / WING_SETPOINT / S_TERM enum entries, and the generated
+// source was regenerated to match (fork commit `3e6d96c` — an earlier
+// commit added the YAML but missed the codegen rerun). Wing-mode logs
+// decode end to end. And for USE_WING firmware the main-frame `wing*`
+// sources listed first below are preferred regardless of `debug_mode`,
+// so these analytics resolve even when a flight's debug_mode was set
+// to something else entirely — the `debug` sources are the stock-BF
+// fallback only.
 //
 // Not represented here:
 //   · The applied TPA factor (post/pre setpoint ratio) — derivable
@@ -160,13 +162,21 @@ export const SIGNALS: Record<string, SignalDef> = {
 
   // TPA factor — the curve OUTPUT applied multiplicatively to PID
   // gains. Main-frame `wingTpaFactor`; debug fallback DEBUG_TPA ch0
-  // (0..1000 BF-encoded). Paired with `tpa_arg` for M5 HYPERBOLIC fit.
+  // (factor × 1000). Paired with `tpa_arg` for M5 HYPERBOLIC fit.
+  //
+  // expected_range is DELIBERATELY GENEROUS [0, 3000]: wing TPA RAISES
+  // gains below cruise airspeed, so the factor exceeds 1.0 (encoded
+  // > 1000) on any normal wing flight — a [0,1000] guard would trip
+  // `out_of_range` on a perfectly healthy log. 3000 (factor 3.0) is
+  // well past BF's `pid_tpa_curve_*` endpoint ceiling; it still
+  // catches a gross channel-index mismatch. TODO verify the true
+  // ceiling against a real DEBUG_TPA log.
   tpa_factor: {
     id: 'tpa_factor',
     perAxis: false,
     sources: () => [
       { kind: 'main_frame', field: 'wingTpaFactor' },
-      { kind: 'debug', mode: 'TPA', channel: 0, expected_range: [0, 1000] },
+      { kind: 'debug', mode: 'TPA', channel: 0, expected_range: [0, 3000] },
     ],
   },
 

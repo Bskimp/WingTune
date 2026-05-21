@@ -107,11 +107,12 @@ describe('parseFirmwareVersion', () => {
 
 describe('resolveSignal expected_range guard', () => {
   it('resolves when sampled values are inside expected_range', () => {
-    // tpa_factor expects [0, 1000], use a sample range well inside.
+    // tpa_factor expects [0, 3000] (wing TPA raises gains > 1.0); use a
+    // sample range well inside — including factor > 1.0 (encoded > 1000).
     const cap = makeCapability({
       debug_mode: 'TPA',
       fields: {
-        'debug[0]': { value_min: 100, value_max: 900 },
+        'debug[0]': { value_min: 100, value_max: 1800 },
       },
     });
     const r = resolveSignal('tpa_factor', null, cap);
@@ -119,8 +120,8 @@ describe('resolveSignal expected_range guard', () => {
   });
 
   it('returns out_of_range when max exceeds expected[1]', () => {
-    // tpa_factor expects [0, 1000]; simulate the limonspb-layout
-    // mismatch where ch0 isn't tpaFactor but something on a wider scale.
+    // tpa_factor expects [0, 3000]; simulate a channel-index mismatch
+    // where ch0 isn't tpaFactor but something on a much wider scale.
     const cap = makeCapability({
       debug_mode: 'TPA',
       fields: {
@@ -130,7 +131,7 @@ describe('resolveSignal expected_range guard', () => {
     const r = resolveSignal('tpa_factor', null, cap);
     expect(r.state).toBe('out_of_range');
     if (r.state === 'out_of_range') {
-      expect(r.expected).toEqual([0, 1000]);
+      expect(r.expected).toEqual([0, 3000]);
       expect(r.observed).toEqual([0, 50000]);
       expect(r.via).toBe('debug');
     }
