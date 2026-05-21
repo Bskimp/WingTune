@@ -18,7 +18,19 @@ watch that peak reappear, flip a LPF and watch the HF rolloff vanish.
 
 ## Status
 
-Not started. Plan locked 2026-05-20 from the Spectrum roadmap:
+✅ **Shipped 2026-05-20** — Slices 1-3 complete (`lib/stft.ts`,
+`lib/bfFilters.ts`, `FilterSimPanel.vue` + `SpectrumTab.vue`,
+`parseFilterParams`). 296 unit tests, typecheck clean. Validated on
+a real twin-motor wing log at 89% sim fidelity; the BF filter math
+is grounded against `docs/firmware-reference/bf-filter-chain-spec.md`
+(betaflight `master` @ `144702cd`). Slice 4 (interactive sandbox)
+deferred per decision 4 below. Deviation from the slice plan: the
+per-stage UI is a new `FilterSimPanel.vue` stacked on the Spectrum
+tab (via `SpectrumTab.vue`), not a rework of `SpectrumPanel` —
+`SpectrumPanel` is a multi-log compare panel and M-FilterSim is
+single-log.
+
+Plan locked 2026-05-20 from the Spectrum roadmap:
 
 1. **RPM filter simulates exactly.** Its notches are locked to motor RPM:
    notch centre = motorFreq × harmonic, and motorFreq comes from `eRPM`,
@@ -123,8 +135,11 @@ PSD + delay budget update. Deferred per decision 4 above.
 
 ## Open questions carried into execution
 
-1. **BF filter source version** — pin the port to the BF release the fork
-   targets; record the source commit. Resolve in the Slice 2 research pass.
+1. **BF filter source version** — ✅ resolved 2026-05-20: `betaflight/betaflight`
+   `master` @ `144702cd` (the `2026.6` line — there is no BF 4.6 branch, BF
+   moved to calendar versioning). Filter math extracted + grounded in
+   `docs/firmware-reference/bf-filter-chain-spec.md`; the `bfFilters.ts` port
+   is written from that spec.
 2. **Dyn-notch tracker fidelity** — how close the STFT self-track lands to
    BF's SDFT. The validation harness is the arbiter; if self-track is too
    rough, the debug-mode path is the upgrade.

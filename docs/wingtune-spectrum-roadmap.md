@@ -19,9 +19,11 @@ when a milestone is picked up (analytics-plan convention).
 
 ## The two milestones
 
-- **S1 — M-FilterSim** — per-stage filter simulation. The headline.
-- **S2 — Airspeed-resolved spectra** — airspeed×frequency spectrogram +
-  low-frequency airframe-mode detection (+ a speculative wavelet view).
+- ~~**S1 — M-FilterSim**~~ — per-stage filter simulation. ✅ **shipped
+  2026-05-20** — validated on a real wing log at 89% sim fidelity.
+- **S2 — Airspeed-resolved spectra** ← **active** — airspeed×frequency
+  spectrogram + low-frequency airframe-mode detection (+ a speculative
+  wavelet view).
 
 **Priority.** Both move ahead of M-Servo-2 in the analytics-plan order:
 S1 → S2 → M-Servo-2 → M-Pilot → …
@@ -82,7 +84,13 @@ Phase 1 validation harness (below) catches it if the self-track is poor.
 
 ---
 
-## S1 — M-FilterSim (per-stage filter simulation)
+## S1 — M-FilterSim (per-stage filter simulation) ✅ SHIPPED
+
+> ✅ Shipped 2026-05-20 — `lib/stft.ts`, `lib/bfFilters.ts`,
+> `FilterSimPanel.vue` on the Spectrum tab (via `SpectrumTab.vue`).
+> Validated on a real twin-motor wing log at 89% sim fidelity.
+> Execution detail + the slice plan: `docs/wingtune-m-filtersim-execution.md`.
+> The notes below are the original design intent.
 
 The Spectrum tab can show raw (`gyroUnfilt`) and full-chain filtered
 (`gyroADC`) — the *net* effect of the whole chain. It cannot show what one
@@ -168,11 +176,11 @@ so a whole-log PSD smears the interesting structure away.
 ## Sequencing summary
 
 ```
-Phase 0   lib/stft.ts                         (shared primitive)
-S1.1      lib/bfFilters.ts + validation       load-bearing
-S1.2      per-stage spectrum display          ← first user-visible payoff
-S1.3      interactive filter sandbox          ambitious — may split out
-S2.2      airspeed × frequency spectrogram    highest-value S2 item
+Phase 0   lib/stft.ts                         ✅ shipped 2026-05-20
+S1.1      lib/bfFilters.ts + validation       ✅ shipped 2026-05-20
+S1.2      per-stage spectrum display          ✅ shipped (FilterSimPanel)
+S1.3      interactive filter sandbox          deferred — see roadmap
+S2.2      airspeed × frequency spectrogram    ← next
 S2.3      low-frequency airframe modes
 S2.4      wavelet / STFT scalogram            speculative
 ```

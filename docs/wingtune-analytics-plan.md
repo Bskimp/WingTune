@@ -15,21 +15,19 @@ don't re-litigate it later.
 
 ## Priority order
 
-> **Status (2026-05-20):** items 1 (M-FF, `abff4fa`) and 2
-> (M-Coupling, `e5f9d87`) shipped. The Spectrum-tab work — M-FilterSim
-> and the airspeed-resolved spectra — has been pulled front and centre
-> into items 3-4; see `docs/wingtune-spectrum-roadmap.md` for the
-> worked-out sequencing. **M-FilterSim (S1) is the active milestone** —
-> execution detail in `docs/wingtune-m-filtersim-execution.md`.
+> **Status (2026-05-20):** items 1 (M-FF), 2 (M-Coupling) and 3
+> (M-FilterSim / Spectrum-roadmap S1) shipped. **S2 — airspeed-
+> resolved spectra — is the active milestone**; see
+> `docs/wingtune-spectrum-roadmap.md` for the worked-out sequencing.
 
 1. ~~**M-FF — Feedforward effectiveness + maneuver detection**~~ —
    ✅ **shipped** abff4fa (2026-05-19)
 2. ~~**M-Coupling — Cross-axis coupling matrix**~~ —
    ✅ **shipped** e5f9d87 (2026-05-20)
-3. **M-FilterSim (S1) — per-stage filter simulation** ← **active** —
-   see `docs/wingtune-spectrum-roadmap.md`
-4. **Airspeed-resolved spectra (S2)** — airspeed×frequency spectrogram
-   + low-frequency airframe-mode detection — see
+3. ~~**M-FilterSim (S1) — per-stage filter simulation**~~ —
+   ✅ **shipped** 2026-05-20, see `docs/wingtune-spectrum-roadmap.md`
+4. **Airspeed-resolved spectra (S2)** ← **next** — airspeed×frequency
+   spectrogram + low-frequency airframe-mode detection — see
    `docs/wingtune-spectrum-roadmap.md`
 5. **M-Servo-2 — Servo hunt + airframe transfer function**
 6. **M-Pilot — Pilot-input style analysis**

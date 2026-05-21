@@ -40,7 +40,7 @@ import AirspeedPanel from '@/components/analysis/AirspeedPanel.vue';
 import TpaCurvePanel from '@/components/analysis/TpaCurvePanel.vue';
 import SpaPanel from '@/components/analysis/SpaPanel.vue';
 import STermPanel from '@/components/analysis/STermPanel.vue';
-import SpectrumPanel from '@/components/analysis/SpectrumPanel.vue';
+import SpectrumTab from '@/components/analysis/SpectrumTab.vue';
 import StepTab from '@/components/analysis/StepTab.vue';
 import RecommendTab from '@/components/analysis/RecommendTab.vue';
 import CapabilitySummary from '@/components/CapabilitySummary.vue';
@@ -118,7 +118,7 @@ watchEffect(() => {
       <TpaCurvePanel v-else-if="activeTab === 'tpa'" />
       <SpaPanel v-else-if="activeTab === 'spa'" />
       <STermPanel v-else-if="activeTab === 'sterm'" />
-      <SpectrumPanel v-else-if="activeTab === 'spectrum'" />
+      <SpectrumTab v-else-if="activeTab === 'spectrum'" />
       <StepTab v-else-if="activeTab === 'step'" />
       <RecommendTab v-else-if="activeTab === 'recommend'" />
     </div>

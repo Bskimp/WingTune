@@ -40,9 +40,9 @@ M1 functionally complete (corpus track aside). **Wing analytics
 suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M-FF feedforward /
 maneuver-detection + M-Coupling cross-axis matrix + M1.7 multi-log
 compare + M1.7.1 time-alignment UI all shipped.** Analytics-plan
-milestones M-FF + M-Coupling closed 2026-05-19/20; **M-FilterSim
-(S1) is the next milestone** — per-stage filter simulation, see
-`docs/wingtune-spectrum-roadmap.md`.
+milestones M-FF + M-Coupling + M-FilterSim (S1) closed
+2026-05-19/20; **Spectrum-roadmap S2 (airspeed-resolved spectra)
+is the next milestone** — see `docs/wingtune-spectrum-roadmap.md`.
 Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
@@ -621,6 +621,30 @@ bearing design decisions.
   (13 new), typecheck clean. Plan:
   `docs/wingtune-m-coupling-execution.md`.
 
+- **M-FilterSim — per-stage gyro filter simulation (2026-05-20,
+  Spectrum-roadmap S1).** Replays Betaflight's gyro filter chain on
+  the logged raw gyro so each stage becomes a toggle — answers
+  "what is this filter actually removing." `lib/stft.ts` —
+  short-time FFT over the existing radix-2 FFT (shared spectral
+  primitive; S2 reuses it). `lib/bfFilters.ts` — BF filter math
+  ported from `docs/firmware-reference/bf-filter-chain-spec.md`
+  (grounded against betaflight `master` @ `144702cd` via a research
+  pass): biquad LPF/notch + PT1/2/3 primitives, then the chain —
+  RPM filter (eRPM-driven, exact), throttle-scheduled dynamic LPF1,
+  dynamic notch (STFT peak-tracker — the one approximation),
+  `simulateChain` + `validateChain` (the `simFidelity` honesty
+  metric). `parseFilterParams` builds the config from BBL header
+  params (keys verified against a real wing-branch log).
+  `FilterSimPanel.vue` on the Spectrum tab (new `SpectrumTab.vue`
+  stacks it below `SpectrumPanel`) — per-axis, RPM/LPF1/dyn-notch
+  toggles, raw/simulated/logged PSD traces, simFidelity badge.
+  Deviation from the slice plan: a new panel, not a rework of the
+  multi-log `SpectrumPanel`. Validated on a real twin-motor wing
+  log at 89% sim fidelity. 296 unit tests (54 new), typecheck
+  clean. Slice 4 (interactive filter sandbox) deferred per the
+  roadmap. Plans: `docs/wingtune-spectrum-roadmap.md` +
+  `docs/wingtune-m-filtersim-execution.md`.
+
 **In flight / pending:**
 
 - **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
@@ -677,18 +701,19 @@ bearing design decisions.
   link from WingTune.
 
 **Immediate next step when resuming code work:** the Spectrum-tab
-roadmap (`docs/wingtune-spectrum-roadmap.md`) is now front-and-
-centre — M-FF (abff4fa) and M-Coupling (e5f9d87) shipped, and the
-Spectrum work was pulled ahead of M-Servo-2. **M-FilterSim (S1) —
-per-stage filter simulation — is the active milestone**; execution
-detail in `docs/wingtune-m-filtersim-execution.md`. The next code
-step is Slice 1: `lib/stft.ts`, a windowed short-time FFT over the
-existing radix-2 FFT, shared with S2. All other near-term work is
-flight-blocked (M-Coupling's three calibration knobs want a
-single-axis-snap flight; Step recommender threshold recalibration
-needs a clean F=0+S=0 PD-isolated reference flight; M3/M5/M6/M7
-visual validation needs throttle-varying cruise) or held on
-Brian's call (upstream `blackbox-log` PR, upstream firmware
+roadmap (`docs/wingtune-spectrum-roadmap.md`) drives from here.
+M-FilterSim (S1) shipped 2026-05-20 — validated on a real wing log
+at 89% sim fidelity. **Spectrum-roadmap S2 — airspeed-resolved
+spectra (airspeed×frequency spectrogram + low-frequency airframe-
+mode detection) — is the next milestone**; it reuses `lib/stft.ts`
+from S1. No execution doc yet — write one when S2 is picked up.
+M-Servo-2 (analytics-plan priority #5) follows. All other near-term
+work is flight-blocked (M-Coupling's three calibration knobs want a
+single-axis-snap flight; M-FilterSim's simFidelity-threshold
+calibration wants more corpus logs; Step recommender threshold
+recalibration needs a clean F=0+S=0 PD-isolated reference flight;
+M3/M5/M6/M7 visual validation needs throttle-varying cruise) or
+held on Brian's call (upstream `blackbox-log` PR, upstream firmware
 writer-order PR).
 
 ## Cardinal rules
