@@ -27,8 +27,11 @@ else:
     return pidThr0 / divisor
 ```
 
-`tpaFactor` multiplies P, I, D (and S/F per BF's existing logic) — output
-> 1 boosts gains, < 1 cuts them. End-points are exact by construction:
+`tpaFactor` multiplies **D always, P in `tpa_mode = PD`/`PDS`, and the
+wing S-term in `PDS`** — it never scales I, and never scales feedforward
+(F). Output > 1 boosts gains, < 1 cuts them. (Verified 2026-05-21 against
+`pid.c::getTpaFactor` / `isTpaActive` — an earlier revision of this doc
+wrongly listed I and F.) End-points are exact by construction:
 `f(thrStall) = pidThr0`, `f(1) = pidThr100`.
 
 Firmware uses `pow_approx` in the hot path and precomputes a 16-segment

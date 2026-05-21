@@ -135,4 +135,21 @@ describe('detectLowFreqModes', () => {
     const r = detectLowFreqModes(sig, 200, 'roll');
     expect(r.peaks.filter((p) => p.mode === 'dutch-roll')).toHaveLength(1);
   });
+
+  test('unclassified peaks are capped at one — the strongest survives', () => {
+    // Two tones in the 0.12-0.4 Hz gap (no named pitch mode there).
+    // Only the strongest unnamed peak earns a chip; the rest are noise.
+    const n = 120 * 200;
+    const ns = noise(n, 0.05);
+    const sig = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const t = i / 200;
+      sig[i] =
+        1.0 * Math.sin(2 * Math.PI * 0.2 * t) +
+        0.6 * Math.sin(2 * Math.PI * 0.3 * t) +
+        ns[i];
+    }
+    const r = detectLowFreqModes(sig, 200, 'pitch');
+    expect(r.peaks.filter((p) => p.mode === 'unclassified').length).toBeLessThanOrEqual(1);
+  });
 });

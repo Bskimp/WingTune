@@ -42,8 +42,8 @@ maneuver-detection + M-Coupling cross-axis matrix + M1.7 multi-log
 compare + M1.7.1 time-alignment UI all shipped.** Analytics-plan
 milestones M-FF + M-Coupling + M-FilterSim (S1) +
 Spectrum-roadmap S2 (airspeed-resolved spectra) closed
-2026-05-19/21; **M-Servo-2 is the next milestone** — see
-`docs/wingtune-analytics-plan.md`.
+2026-05-19/21; **M-Style — the Cruise/Sport/3D tune-style dial —
+is the next milestone** — see `docs/wingtune-analytics-plan.md`.
 Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
@@ -731,9 +731,10 @@ bearing design decisions.
 roadmap milestones shipped (S1 2026-05-20, S2 2026-05-21) — the
 Spectrum tab is now a four-panel spectral workbench (multi-log PSD
 compare, per-stage filter sim, airspeed×frequency spectrogram,
-sub-3 Hz airframe modes). **M-Servo-2 (analytics-plan priority #5 —
-servo hunt detection + transfer function) is the next milestone**;
-see `docs/wingtune-analytics-plan.md`. All other near-term work is
+sub-3 Hz airframe modes). **M-Style (analytics-plan priority #5 —
+the Cruise/Sport/3D "tune-style dial" that reweights every
+recommender's thresholds + targets) is the next milestone**; see
+`docs/wingtune-analytics-plan.md`. All other near-term work is
 flight-blocked (M-Coupling's three calibration knobs want a
 single-axis-snap flight; M-FilterSim's simFidelity-threshold and
 S2's peak-detection / smoothing knobs want more corpus logs; Step

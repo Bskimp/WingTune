@@ -118,9 +118,17 @@ const MAX_FFT_LEN = 65536;
 const MIN_PEAK_SEP_HZ = 0.05;
 /** Maximum peaks reported in total. */
 const MAX_PEAKS = 8;
-/** Maximum 'unclassified' peaks reported — named-mode peaks are capped
- *  at one each (a band is one physical rigid-body mode; see findPeaks). */
-const MAX_UNCLASSIFIED_PEAKS = 3;
+/** Maximum 'unclassified' peaks reported (named-mode peaks are capped
+ *  at one each). An unnamed peak can't be called a mode, so only the
+ *  single strongest is worth surfacing — a real structural resonance
+ *  dominates; weaker bumps are low-frequency noise. */
+const MAX_UNCLASSIFIED_PEAKS = 1;
+/** Prominence an 'unclassified' peak must clear to be reported, dB —
+ *  higher than the named-mode bar (`prominenceDb`, default 6). A peak
+ *  outside every named band only earns a chip if it really stands out;
+ *  otherwise short / noisy logs litter the gap between bands with
+ *  spurious bumps. TODO calibrate against a clean-flight corpus log. */
+const UNCLASSIFIED_PROMINENCE_DB = 12;
 /** Proportional smoothing width applied to the PSD before peak-picking:
  *  bin i is boxcar-averaged over ±round(absBin · this) neighbours.
  *  Frequency-proportional (not fixed-width) so it cleans noise spikes in
@@ -266,6 +274,7 @@ function findPeaks(
     if (kept.length >= MAX_PEAKS) break;
     if (p.mode === 'unclassified') {
       if (unclassified >= MAX_UNCLASSIFIED_PEAKS) continue;
+      if (p.prominenceDb < UNCLASSIFIED_PROMINENCE_DB) continue;
       if (kept.some((q) => Math.abs(q.freqHz - p.freqHz) < MIN_PEAK_SEP_HZ)) continue;
       unclassified++;
     } else {

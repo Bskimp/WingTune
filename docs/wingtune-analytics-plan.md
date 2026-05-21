@@ -17,7 +17,7 @@ don't re-litigate it later.
 
 > **Status (2026-05-21):** items 1 (M-FF), 2 (M-Coupling), 3
 > (M-FilterSim / Spectrum-roadmap S1) and 4 (Spectrum-roadmap S2)
-> shipped. **M-Servo-2 is the next milestone.**
+> shipped. **M-Style — the tune-style dial — is the next milestone.**
 
 1. ~~**M-FF — Feedforward effectiveness + maneuver detection**~~ —
    ✅ **shipped** abff4fa (2026-05-19)
@@ -28,13 +28,15 @@ don't re-litigate it later.
 4. ~~**Airspeed-resolved spectra (S2)**~~ — airspeed×frequency
    spectrogram + low-frequency airframe-mode detection —
    ✅ **shipped** 2026-05-21, see `docs/wingtune-s2-execution.md`
-5. **M-Servo-2 — Servo hunt + airframe transfer function** ← **next**
-6. **M-Pilot — Pilot-input style analysis**
-7. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
+5. **M-Style — Tune-style profiles (the "style dial")** ← **next** —
+   Cruise / Sport / 3D, shifts every recommender's thresholds + targets
+6. **M-Servo-2 — Servo hunt + airframe transfer function**
+7. **M-Pilot — Pilot-input style analysis** — feeds M-Style's auto-detect
+8. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
    folds into the existing Airspeed panel)
-8. **Craft persistence infrastructure** — needs its own design pass
+9. **Craft persistence infrastructure** — needs its own design pass
    before any of the above can have a longitudinal-history feature
-9. **Airspeed-binned step response** — the one wing-regime spectral-
+10. **Airspeed-binned step response** — the one wing-regime spectral-
    batch item NOT pulled into the Spectrum roadmap; it lives on the
    Step tab, not Spectrum, and reuses `computeStepResponse` + the M3
    airspeed estimate. (Airspeed×frequency spectrogram, low-frequency
@@ -209,9 +211,91 @@ That distinction changes the tuning advice.
   distribution, per-axis activity. Possibly a one-line characterization
   ("frequent small corrections — wing may want more dihedral / softer
   rates").
+- **Feeds M-Style:** the input-style classification is the natural
+  signal for *suggesting* a tune-style profile (Cruise / Sport / 3D) —
+  see M-Style below.
 - **Open question:** this leans toward "interesting once in a while"
   rather than "tune against it every flight" — keep it lightweight,
   don't over-invest.
+
+---
+
+## M-Style — Tune-style profiles (the "style dial")
+
+**Why:** every recommender emits thresholds and CLI targets against an
+implicit "default wing." But the *same log* should produce different
+advice depending on what the wing is FOR. A relaxed cruiser and a 3D /
+aggressive plane want genuinely different tunes: the cruiser trades
+latency for smoothness and wants well-damped, predictable behaviour;
+the 3D plane wants the filter chain as short as possible, leans on
+feedforward, and treats light damping as a feature, not a fault. The
+analysis math is identical — what changes is the *interpretation*.
+
+**The idea:** one user-facing setting — **Cruise / Sport / 3D** — that
+shifts the recommenders' thresholds and targets. Not new analysis: an
+interpretation layer over everything already built. Sport is the
+jack-of-all-trades middle, and the default — so an un-set profile gives
+balanced advice ≈ today's behaviour, and nothing regresses.
+
+**Data:** none new. A `tuneProfile` setting + a profile-aware threshold
+layer the recommenders read.
+
+### What each profile shifts (per recommender)
+
+- **Filter-delay budget (M4)** — 3D tightens the green/orange/red bands
+  (less tolerated latency); Cruise loosens them.
+- **TPA curve fit (M5)** — 3D biases the recommended `tpa_curve_pid_thr0`
+  higher (more low-speed authority boost); Cruise lower.
+- **Step response (M-Step)** — different "good" peak / latency targets;
+  3D wants a snappier rise and tolerates more overshoot.
+- **Coupling matrix (M-Coupling)** — 3D raises `SIGNIFICANT_COUPLING`
+  (aggressive flight naturally couples axes; don't flag the expected).
+- **Airframe modes (S2)** — 3D tolerates lighter damping; relevant only
+  if that panel ever emits a rec (today it deliberately doesn't).
+- The remaining recommenders (PIDFS shares, input-chain, SPA, airspeed)
+  get a per-recommender review of which thresholds are style-sensitive.
+
+### Architecture
+
+- `tuneProfile: 'cruise' | 'sport' | '3d'` in the view store, persisted
+  to `localStorage` so it survives reload.
+- `lib/tuneProfile.ts` — the single place mapping profile → threshold
+  set. Every per-style number is `TODO calibrate`; the Sport set equals
+  today's hardcoded constants, so the default selection is a no-op.
+- Recommenders take the active profile via `RecommenderArgs` and read
+  thresholds from the profile instead of file-scope constants.
+- A 3-way UI selector — global, near the Recommend tab (sibling to
+  `SmoothingControl`).
+
+**The honesty rule:** the profile is the user's *declared intent*. The
+tool never silently picks it — worst case the user leaves it on Sport.
+(Same fingerprint-as-suggestion principle as craft persistence.)
+
+### Relationship to M-Pilot
+
+M-Pilot *describes* how a log was flown (correction rate, input
+amplitude); M-Style is the *setting* that changes the advice. They
+pair: once M-Pilot ships it can *suggest* a profile ("this log was
+flown aggressively — switch to the 3D profile?") — a suggestion, never
+an override. M-Style ships first with manual selection; M-Pilot later
+adds the suggest hook. M-Style does NOT depend on M-Pilot.
+
+### Open questions
+
+- **How many profiles** — 3 (Cruise / Sport / 3D) proposed; a 4th
+  (race / efficiency?) could earn its place later. Start with 3.
+- **Per-axis style?** A plane can be 3D in pitch/roll but tame in yaw —
+  keep the dial global for v1; revisit only if it bites.
+- **Targets vs confidence** — the profile shifts *thresholds and
+  targets*, not the green/yellow/red confidence machinery itself.
+- **Calibration** — every per-profile number wants corpus logs flown in
+  each style. Ship conservative; Sport ≈ current behaviour.
+
+**Slice sketch** (execution doc written when the milestone is picked
+up): (1) `lib/tuneProfile.ts` + view-store ref + persistence; (2)
+migrate the most style-sensitive recommenders — filter delay, TPA
+curve, step response — to profile-aware thresholds; (3) the UI
+selector; (4) — later, with M-Pilot — the auto-suggest hook.
 
 ---
 
