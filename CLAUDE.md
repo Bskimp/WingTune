@@ -42,9 +42,10 @@ maneuver-detection + M-Coupling cross-axis matrix + M1.7 multi-log
 compare + M1.7.1 time-alignment UI all shipped.** Analytics-plan
 milestones M-FF + M-Coupling + M-FilterSim (S1) +
 Spectrum-roadmap S2 (airspeed-resolved spectra) + M-Style
-(Cruise/Sport/3D tune-style dial) closed 2026-05-19/21;
-**M-Servo-2 is the next milestone** — see
-`docs/wingtune-analytics-plan.md`.
+(Cruise/Sport/3D tune-style dial) + M-Servo-2 (servo hunt +
+airframe transfer function) closed 2026-05-19/21.
+**M-Pilot (input-style classification) is the next milestone** —
+see `docs/wingtune-analytics-plan.md`.
 Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
@@ -697,6 +698,47 @@ bearing design decisions.
   auto-suggest) deferred until M-Pilot ships. 333 unit tests. Plan:
   `docs/wingtune-m-style-execution.md`.
 
+- **M-Servo-2 — servo hunt + airframe transfer function
+  (2026-05-21, commits `0700b0c`..`6f350cc`).** Analytics-plan
+  priority #6. Four slices, all diagnostic-only (no recommender,
+  no CLI — a servo hunt is a bench fix, the airframe bandwidth a
+  physics ceiling; neither has a firmware `set`):
+    · **Slice 1** — `lib/transferFunction.ts`: Welch-averaged
+      cross-spectral estimator. `estimateTransferFunction` →
+      H(f) = Sxy/Sxx (magnitude / dB / phase) + magnitude-squared
+      coherence γ²; `estimateBandwidth` → the −3 dB rolloff of |H|
+      relative to the low-frequency gain plateau, coherence-gated,
+      returns `trustworthy`. Reuses the lib/spectrum FFT + Hann
+      window — no second FFT. Per-segment mean removal strips the
+      ~1500 µs servo PWM trim.
+    · **Slice 2** — `AirframeBandwidthPanel.vue` on the Servos
+      tab: per-axis Bode plot (|H| dB + coherence vs log
+      frequency), −3 dB rolloff marked, low-coherence spans
+      greyed. Window selection runs the estimate over the M-FF
+      maneuver windows (each padded ±1 s, merged) when the flight
+      has enough coverage, whole-flight fallback otherwise —
+      `estimateTransferFunction` gained a `regions` param so
+      segments never straddle a boundary (non-contiguous spans, no
+      join discontinuity).
+    · **Slice 3** — `lib/servoHunt.ts`: per-servo hunt score. A
+      2-pole high-pass isolates the servo-PWM hunt band,
+      `hfRmsPwm` measures its amplitude, peak cross-correlation
+      against the same-band rate setpoint gives the commanded
+      fraction, `huntScore = hfRmsPwm·(1−r)`. Setpoint — NOT gyro
+      — is the command reference: servo PWM is a function of gyro,
+      so a gyro reference would explain away the very content the
+      score should flag and collapse it toward 0.
+    · **Slice 4** — `ServoHuntPanel.vue` on the Servos tab:
+      per-channel hunt rows (HF RMS · cmd-corr · score · severity)
+      sorted worst-first. Built as its own panel rather than a
+      strip on `ServoAsymmetryPanel` — hunt is per-channel and
+      applies to every classified servo, whereas the asymmetry
+      panel only renders ≥2-servo axes.
+  HF band edges + score / bandwidth thresholds are wing-regime
+  first guesses (TODO calibrate). 360 unit tests (+27 — 16
+  transferFunction, 11 servoHunt). Plan:
+  `docs/wingtune-m-servo-2-execution.md`.
+
 **In flight / pending:**
 
 - **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
@@ -752,18 +794,18 @@ bearing design decisions.
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** M-Style (the
-Cruise/Sport/3D tune-style dial) shipped 2026-05-21 — Slices 1-3
-done, Slice 4 (M-Pilot auto-suggest) deferred until M-Pilot ships.
-**M-Servo-2 (analytics-plan priority #6 — servo hunt detection +
-airframe transfer function) is the next milestone**; see
-`docs/wingtune-analytics-plan.md`. No execution doc yet — write one
-when M-Servo-2 is picked up. All other near-term work is
-flight-blocked (M-Coupling's three calibration knobs want a
-single-axis-snap flight; M-FilterSim's simFidelity-threshold and
-S2's peak-detection / smoothing knobs want more corpus logs;
-M-Style's per-profile Cruise / 3D thresholds want corpus logs flown
-in each style; Step
+**Immediate next step when resuming code work:** M-Servo-2 (servo
+hunt + airframe transfer function) shipped 2026-05-21 — all four
+slices done. **M-Pilot (input-style classification) is the next
+milestone** — it also unblocks the deferred M-Style Slice 4
+(profile auto-suggest); see `docs/wingtune-analytics-plan.md`. No
+execution doc yet — write one when M-Pilot is picked up. All other
+near-term work is flight-blocked (M-Servo-2's hunt-band edge +
+score + bandwidth thresholds want corpus calibration; M-Coupling's
+three calibration knobs want a single-axis-snap flight;
+M-FilterSim's simFidelity-threshold and S2's peak-detection /
+smoothing knobs want more corpus logs; M-Style's per-profile
+Cruise / 3D thresholds want corpus logs flown in each style; Step
 recommender threshold recalibration needs a clean F=0+S=0
 PD-isolated reference flight; M3/M5/M6/M7 visual validation needs
 throttle-varying cruise) or held on Brian's call (upstream

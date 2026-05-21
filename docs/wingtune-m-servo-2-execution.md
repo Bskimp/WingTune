@@ -29,7 +29,7 @@ log (servo PWM + gyro) — no debug mode, no special flight required:
 
 ## Status
 
-🚧 **In progress** — execution plan locked 2026-05-21.
+✅ **Complete** — all four slices shipped 2026-05-21.
 
 - ✅ **Slice 1** — `lib/transferFunction.ts` shipped 2026-05-21.
   Welch-averaged cross-spectral estimator: `estimateTransferFunction`
@@ -52,7 +52,15 @@ log (servo PWM + gyro) — no debug mode, no special flight required:
   `huntScore = hfRmsPwm · (1 − r)`. Setpoint (not gyro) is the command
   reference — see the module header for why gyro would make the score
   degenerate. 11 unit tests.
-- ⬜ Slice 4 — per-servo hunt indicator UI.
+- ✅ **Slice 4** — `ServoHuntPanel.vue` shipped 2026-05-21. Per-channel
+  hunt rows (HF RMS · cmd-corr · hunt score · severity badge), sorted
+  worst-first, on the Servos tab. Built as its OWN panel rather than a
+  strip on `ServoAsymmetryPanel` — hunt is per-channel and applies to
+  every classified servo, whereas the asymmetry panel only renders
+  axes with ≥ 2 servos, so embedding hunt there would hide it on
+  single-surface-per-axis wings. **No recommender** (decided here per
+  Scope) — a hunting servo is a bench investigation, not a firmware
+  `set`; consistent with the rest of M-Servo-2 being diagnostic-only.
 
 ## Scope
 
