@@ -21,12 +21,13 @@ when a milestone is picked up (analytics-plan convention).
 
 - ~~**S1 — M-FilterSim**~~ — per-stage filter simulation. ✅ **shipped
   2026-05-20** — validated on a real wing log at 89% sim fidelity.
-- **S2 — Airspeed-resolved spectra** ← **active** — airspeed×frequency
-  spectrogram + low-frequency airframe-mode detection (+ a speculative
-  wavelet view).
+- ~~**S2 — Airspeed-resolved spectra**~~ — airspeed×frequency spectrogram
+  + low-frequency airframe-mode detection. ✅ **shipped 2026-05-21**.
+  Slice 4 (wavelet view) deferred. Execution detail:
+  `docs/wingtune-s2-execution.md`.
 
-**Priority.** Both move ahead of M-Servo-2 in the analytics-plan order:
-S1 → S2 → M-Servo-2 → M-Pilot → …
+**Priority.** Both shipped ahead of M-Servo-2 in the analytics-plan order:
+S1 → S2 → **M-Servo-2 ← next** → M-Pilot → …
 
 **Order.** S1 first — more concrete, clearer payoff, and the RPM-filter piece
 turns out exact rather than approximate (below). S1 and S2 are independent in
@@ -131,7 +132,15 @@ chain so each stage becomes a toggle.
 
 ---
 
-## S2 — Airspeed-resolved + low-frequency spectra
+## S2 — Airspeed-resolved + low-frequency spectra ✅ SHIPPED
+
+> ✅ Shipped 2026-05-21 — `lib/airspeedSpectrogram.ts` +
+> `AirspeedSpectrogramPanel.vue` (airspeed×frequency heatmap, Phase 2),
+> `lib/lowFreqModes.ts` + `LowFreqModePanel.vue` (sub-3 Hz airframe-mode
+> detection, Phase 3), both stacked on the Spectrum tab. Phase 4 (wavelet
+> scalogram) deferred. Execution detail + the lessons learned:
+> `docs/wingtune-s2-execution.md`. The notes below are the original
+> design intent.
 
 M4's whole-log PSD assumes the spectrum is stationary across the flight.
 On a wing the plant scales with airspeed and disturbances are non-stationary,
@@ -180,13 +189,13 @@ Phase 0   lib/stft.ts                         ✅ shipped 2026-05-20
 S1.1      lib/bfFilters.ts + validation       ✅ shipped 2026-05-20
 S1.2      per-stage spectrum display          ✅ shipped (FilterSimPanel)
 S1.3      interactive filter sandbox          deferred — see roadmap
-S2.2      airspeed × frequency spectrogram    ← next
-S2.3      low-frequency airframe modes
-S2.4      wavelet / STFT scalogram            speculative
+S2.2      airspeed × frequency spectrogram    ✅ shipped 2026-05-21
+S2.3      low-frequency airframe modes        ✅ shipped 2026-05-21
+S2.4      wavelet / STFT scalogram            speculative — deferred
 ```
 
-Land S1.1-S1.2 and S2.2 — the high-confidence core — before committing to the
-speculative tails (S1.3, S2.4).
+S1.1-S1.2 and S2.2-S2.3 — the high-confidence core — all shipped. The
+speculative tails (S1.3 filter sandbox, S2.4 wavelet) stay deferred.
 
 ---
 
@@ -209,6 +218,8 @@ speculative tails (S1.3, S2.4).
 
 ## Next step
 
-When S1 is picked up, write `docs/wingtune-m-filtersim-execution.md` with the
-slice-by-slice breakdown — same convention as the M-FF / M-Coupling execution
-docs. This roadmap stays the "why + sequencing" reference.
+Both Spectrum-roadmap milestones are shipped (S1 2026-05-20, S2 2026-05-21).
+The Spectrum tab is now a four-panel spectral workbench. The next analytics
+milestone is **M-Servo-2** (`docs/wingtune-analytics-plan.md`). The deferred
+tails — S1.3 (interactive filter sandbox) and S2.4 (wavelet scalogram) —
+remain land-core-first / decide-later.

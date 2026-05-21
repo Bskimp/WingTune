@@ -15,10 +15,9 @@ don't re-litigate it later.
 
 ## Priority order
 
-> **Status (2026-05-20):** items 1 (M-FF), 2 (M-Coupling) and 3
-> (M-FilterSim / Spectrum-roadmap S1) shipped. **S2 — airspeed-
-> resolved spectra — is the active milestone**; see
-> `docs/wingtune-spectrum-roadmap.md` for the worked-out sequencing.
+> **Status (2026-05-21):** items 1 (M-FF), 2 (M-Coupling), 3
+> (M-FilterSim / Spectrum-roadmap S1) and 4 (Spectrum-roadmap S2)
+> shipped. **M-Servo-2 is the next milestone.**
 
 1. ~~**M-FF — Feedforward effectiveness + maneuver detection**~~ —
    ✅ **shipped** abff4fa (2026-05-19)
@@ -26,10 +25,10 @@ don't re-litigate it later.
    ✅ **shipped** e5f9d87 (2026-05-20)
 3. ~~**M-FilterSim (S1) — per-stage filter simulation**~~ —
    ✅ **shipped** 2026-05-20, see `docs/wingtune-spectrum-roadmap.md`
-4. **Airspeed-resolved spectra (S2)** ← **next** — airspeed×frequency
-   spectrogram + low-frequency airframe-mode detection — see
-   `docs/wingtune-spectrum-roadmap.md`
-5. **M-Servo-2 — Servo hunt + airframe transfer function**
+4. ~~**Airspeed-resolved spectra (S2)**~~ — airspeed×frequency
+   spectrogram + low-frequency airframe-mode detection —
+   ✅ **shipped** 2026-05-21, see `docs/wingtune-s2-execution.md`
+5. **M-Servo-2 — Servo hunt + airframe transfer function** ← **next**
 6. **M-Pilot — Pilot-input style analysis**
 7. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
    folds into the existing Airspeed panel)

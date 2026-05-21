@@ -5,6 +5,7 @@ import {
   fitBasicAirspeedModel,
   computeCoverage,
   buildAirspeedFitInputs,
+  buildWholeLogAirspeed,
   resolveMaxVoltageX100,
   resolveAirspeedPitchField,
   type BasicAirspeedParams,
@@ -458,5 +459,70 @@ describe('resolveAirspeedPitchField', () => {
   test('returns the attitude[1] default when nothing resolves', () => {
     const cap = makeCapability(['gyroADC[0]']);
     expect(resolveAirspeedPitchField(cap)).toBe('attitude[1]');
+  });
+});
+
+describe('buildWholeLogAirspeed', () => {
+  // 100 Hz main frame; the GPS window covers only the middle 60% of the
+  // log, so a whole-log series must be longer than the GPS-trimmed fit.
+  function makeFields(opts: { withGps: boolean; withThrottle?: boolean }): {
+    time: Float32Array;
+    gpsTimeSec: Float32Array;
+    fields: Map<string, Float32Array>;
+  } {
+    const time = makeTimeAxis(3, 100); // 300 samples
+    const fields = new Map<string, Float32Array>();
+    if (opts.withThrottle ?? true) {
+      fields.set('rcCommand[3]', fill(time.length, 1500)); // BF PWM mid-stick
+    }
+    fields.set('vbatLatest', fill(time.length, 12));
+
+    let gpsTimeSec = new Float32Array(0);
+    if (opts.withGps) {
+      const gpsCount = 21;
+      gpsTimeSec = new Float32Array(gpsCount);
+      const gpsSpeed = new Float32Array(gpsCount);
+      const span = time[time.length - 1];
+      for (let j = 0; j < gpsCount; j++) {
+        gpsTimeSec[j] = span * 0.2 + (j / (gpsCount - 1)) * span * 0.6;
+        gpsSpeed[j] = 15;
+      }
+      fields.set('gps:GPS_speed', gpsSpeed);
+    }
+    return { time, gpsTimeSec, fields };
+  }
+
+  test('returns null when there is no GPS lock to fit against', () => {
+    const { time, gpsTimeSec, fields } = makeFields({ withGps: false });
+    expect(buildWholeLogAirspeed({ time, gpsTimeSec, fields })).toBeNull();
+  });
+
+  test('returns null when throttle is missing', () => {
+    const { time, gpsTimeSec, fields } = makeFields({ withGps: true, withThrottle: false });
+    expect(buildWholeLogAirspeed({ time, gpsTimeSec, fields })).toBeNull();
+  });
+
+  test('airspeed spans the whole main-frame axis, not just the GPS window', () => {
+    const { time, gpsTimeSec, fields } = makeFields({ withGps: true });
+    const r = buildWholeLogAirspeed({ time, gpsTimeSec, fields });
+    expect(r).not.toBeNull();
+    // The GPS window was only the middle 60% of the log — a whole-log
+    // series still covers every main-frame sample.
+    expect(r!.airspeed.length).toBe(time.length);
+    for (let i = 0; i < r!.airspeed.length; i++) {
+      expect(Number.isFinite(r!.airspeed[i])).toBe(true);
+      expect(r!.airspeed[i]).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  test('reports fitted params, R² and the pitch-fallback flag', () => {
+    const { time, gpsTimeSec, fields } = makeFields({ withGps: true });
+    const r = buildWholeLogAirspeed({ time, gpsTimeSec, fields });
+    expect(r).not.toBeNull();
+    expect(r!.params.delayMs).toBeGreaterThan(0);
+    expect(r!.params.gravityPct).toBeGreaterThan(0);
+    expect(Number.isFinite(r!.rSquared)).toBe(true);
+    // No attitude[1] field in the fixture → pitch fell back to level.
+    expect(r!.pitchFromFallback).toBe(true);
   });
 });

@@ -398,6 +398,79 @@ export function buildAirspeedFitInputs(args: BuildInputsArgs): BuiltInputs | nul
   };
 }
 
+export interface WholeLogAirspeed {
+  /** Predicted airspeed in m/s — one sample per main-frame sample, the
+   *  FULL `args.time` axis, NOT trimmed to the GPS-lock window. */
+  airspeed: Float32Array;
+  /** Fitted BASIC params (delay / gravity). */
+  params: BasicAirspeedParams;
+  /** Fit R² over the GPS window. A poor fit (low R²) means the whole-log
+   *  airspeed is shaky — propagate so a consumer can flag it. */
+  rSquared: number;
+  /** True when no pitch field was available and pitch fell back to zero. */
+  pitchFromFallback: boolean;
+}
+
+/** Estimate airspeed across the WHOLE log via the BF BASIC model.
+ *
+ *  `buildAirspeedFitInputs` trims to the GPS-lock window so the fit has a
+ *  ground-truth target; consumers that need airspeed over the entire
+ *  flight (the S2 airspeed-resolved spectrogram) re-integrate the fitted
+ *  model over the un-trimmed main-frame axis.
+ *
+ *  Returns null when the BASIC fit can't run (no GPS lock, or throttle /
+ *  vbat absent) — there is then no model airspeed for the whole log. */
+export function buildWholeLogAirspeed(
+  args: BuildInputsArgs,
+): WholeLogAirspeed | null {
+  const built = buildAirspeedFitInputs(args);
+  if (!built) return null;
+  const fit = fitBasicAirspeedModel(built.inputs);
+
+  // Re-project the model inputs over EVERY main-frame sample — the fit
+  // window above is only the GPS-locked sub-range. Same per-sample unit
+  // conversion + pitch sign convention as buildAirspeedFitInputs.
+  const throttle = args.fields.get('rcCommand[3]');
+  const vbat = args.fields.get('vbatLatest');
+  if (!throttle || throttle.length === 0) return null;
+  if (!vbat || vbat.length === 0) return null;
+  const n = args.time.length;
+  if (n < 2) return null;
+
+  const pitchRaw = args.fields.get(resolveAirspeedPitchField(args.capability));
+  const pitchFromFallback = !pitchRaw || pitchRaw.length === 0;
+
+  const th = new Float32Array(n);
+  const vb = new Float32Array(n);
+  const pi = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let thv = (throttle[i] - 1000) / 1000;
+    if (thv < 0) thv = 0;
+    else if (thv > 1) thv = 1;
+    th[i] = thv;
+    vb[i] = vbat[i];
+    // attitude pitch is deci-degrees, BF sign NEGATIVE for nose-up; the
+    // integrator wants nose-up-positive radians (see file header).
+    if (!pitchFromFallback) pi[i] = (-pitchRaw![i] * 0.1 * Math.PI) / 180;
+  }
+
+  const { maxVoltageX100 } = resolveMaxVoltageX100(args.headerParams, vb);
+  const airspeed = integrateBasicAirspeedModel(fit.params, {
+    time: args.time,
+    throttle: th,
+    vbat: vb,
+    pitch: pi,
+    maxVoltageX100,
+  });
+
+  return {
+    airspeed,
+    params: fit.params,
+    rSquared: fit.rSquared,
+    pitchFromFallback,
+  };
+}
+
 export function computeCoverage(inputs: AirspeedFitInputs): CoverageMetrics {
   const n = inputs.time.length;
   const empty: CoverageMetrics = {

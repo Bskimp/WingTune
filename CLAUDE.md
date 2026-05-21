@@ -40,9 +40,10 @@ M1 functionally complete (corpus track aside). **Wing analytics
 suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M-FF feedforward /
 maneuver-detection + M-Coupling cross-axis matrix + M1.7 multi-log
 compare + M1.7.1 time-alignment UI all shipped.** Analytics-plan
-milestones M-FF + M-Coupling + M-FilterSim (S1) closed
-2026-05-19/20; **Spectrum-roadmap S2 (airspeed-resolved spectra)
-is the next milestone** — see `docs/wingtune-spectrum-roadmap.md`.
+milestones M-FF + M-Coupling + M-FilterSim (S1) +
+Spectrum-roadmap S2 (airspeed-resolved spectra) closed
+2026-05-19/21; **M-Servo-2 is the next milestone** — see
+`docs/wingtune-analytics-plan.md`.
 Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
@@ -645,6 +646,32 @@ bearing design decisions.
   roadmap. Plans: `docs/wingtune-spectrum-roadmap.md` +
   `docs/wingtune-m-filtersim-execution.md`.
 
+- **S2 — airspeed-resolved spectra (2026-05-21, Spectrum-roadmap
+  S2).** Two new Spectrum-tab panels. `lib/airspeedSpectrogram.ts`
+  + `AirspeedSpectrogramPanel.vue` — gyro STFT columns binned by
+  the airspeed at each column's centre time → an airspeed×frequency
+  heatmap (uPlot `draw`-hook per-cell `fillRect` blit; under-sampled
+  airspeed bins faded, empty bins blank; the loud sub-8 Hz band
+  excluded from the colormap auto-range so it can't wash out the
+  resonances). Airspeed-source toggle: the M3 BASIC whole-log
+  estimate (new `buildWholeLogAirspeed` in `airspeedFit.ts` —
+  re-integrates the fit over the full main-frame axis) or GPS
+  groundspeed. `lib/lowFreqModes.ts` + `LowFreqModePanel.vue` —
+  sub-3 Hz airframe-mode detection: a decimated long-window FFT,
+  peak-picked + labelled phugoid / dutch-roll / short-period by
+  frequency band + axis, each band carrying a `resolved` flag
+  (phugoid needs ~100 s of continuous flight). Frequency-
+  proportional triangular PSD smoothing + a one-peak-per-named-band
+  rule stop a spiky band over-reporting one physical mode as
+  several. No recommender — both views are diagnostic (airframe
+  modes have no firmware fix; a mode is only a problem when poorly
+  damped, and damping estimation is out of S2 scope). uPlot gotcha
+  logged: the native log distr (`distr: 3`) renders blank in this
+  build, so the low-freq panel plots `log10(Hz)` on a linear
+  scale. 319 unit tests (+22), typecheck clean. Slice 5 (wavelet
+  scalogram) deferred. Plans: `docs/wingtune-spectrum-roadmap.md` +
+  `docs/wingtune-s2-execution.md`.
+
 **In flight / pending:**
 
 - **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
@@ -700,21 +727,20 @@ bearing design decisions.
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** the Spectrum-tab
-roadmap (`docs/wingtune-spectrum-roadmap.md`) drives from here.
-M-FilterSim (S1) shipped 2026-05-20 — validated on a real wing log
-at 89% sim fidelity. **Spectrum-roadmap S2 — airspeed-resolved
-spectra (airspeed×frequency spectrogram + low-frequency airframe-
-mode detection) — is the next milestone**; it reuses `lib/stft.ts`
-from S1. No execution doc yet — write one when S2 is picked up.
-M-Servo-2 (analytics-plan priority #5) follows. All other near-term
-work is flight-blocked (M-Coupling's three calibration knobs want a
-single-axis-snap flight; M-FilterSim's simFidelity-threshold
-calibration wants more corpus logs; Step recommender threshold
-recalibration needs a clean F=0+S=0 PD-isolated reference flight;
-M3/M5/M6/M7 visual validation needs throttle-varying cruise) or
-held on Brian's call (upstream `blackbox-log` PR, upstream firmware
-writer-order PR).
+**Immediate next step when resuming code work:** both Spectrum-tab
+roadmap milestones shipped (S1 2026-05-20, S2 2026-05-21) — the
+Spectrum tab is now a four-panel spectral workbench (multi-log PSD
+compare, per-stage filter sim, airspeed×frequency spectrogram,
+sub-3 Hz airframe modes). **M-Servo-2 (analytics-plan priority #5 —
+servo hunt detection + transfer function) is the next milestone**;
+see `docs/wingtune-analytics-plan.md`. All other near-term work is
+flight-blocked (M-Coupling's three calibration knobs want a
+single-axis-snap flight; M-FilterSim's simFidelity-threshold and
+S2's peak-detection / smoothing knobs want more corpus logs; Step
+recommender threshold recalibration needs a clean F=0+S=0
+PD-isolated reference flight; M3/M5/M6/M7 visual validation needs
+throttle-varying cruise) or held on Brian's call (upstream
+`blackbox-log` PR, upstream firmware writer-order PR).
 
 ## Cardinal rules
 
