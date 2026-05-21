@@ -45,7 +45,13 @@ log (servo PWM + gyro) — no debug mode, no special flight required:
   maneuver coverage, falling back to whole-flight otherwise; segments
   never straddle a region boundary so non-contiguous spans introduce
   no join discontinuity. 3 more unit tests for `regions`.
-- ⬜ Slice 3 — `lib/servoHunt.ts`.
+- ✅ **Slice 3** — `lib/servoHunt.ts` shipped 2026-05-21. Per-servo
+  hunt score: 2-pole high-pass isolates the servo PWM hunt band,
+  `hfRmsPwm` measures its amplitude, peak normalized cross-correlation
+  against the high-passed rate setpoint gives the commanded fraction,
+  `huntScore = hfRmsPwm · (1 − r)`. Setpoint (not gyro) is the command
+  reference — see the module header for why gyro would make the score
+  degenerate. 11 unit tests.
 - ⬜ Slice 4 — per-servo hunt indicator UI.
 
 ## Scope
