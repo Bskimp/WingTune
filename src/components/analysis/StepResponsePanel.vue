@@ -47,6 +47,7 @@ import {
   tintTowardFamily,
   type FamilySpec,
 } from '@/lib/logColors';
+import { thresholdsFor } from '@/lib/tuneProfile';
 
 const COLORS = {
   ink3:   '#7a90b0',
@@ -370,10 +371,21 @@ const segmentInfo = computed(() => {
 const peakToneClass = computed(() => {
   const r = firstResult.value;
   if (!r) return 'text-bp-ink';
-  if (r.peakAmplitude > 1.30) return 'text-bp-stamp';
-  if (r.peakAmplitude > 1.10) return 'text-bp-warn';
-  if (r.peakAmplitude < 0.85) return 'text-bp-warn';
+  // Bands track the tune-style dial (M-Style) — 3D tolerates more
+  // overshoot but flags a sluggish response sooner.
+  const t = thresholdsFor(view.tuneProfile);
+  if (r.peakAmplitude > t.stepPeakBadHigh) return 'text-bp-stamp';
+  if (r.peakAmplitude > t.stepPeakWarnHigh) return 'text-bp-warn';
+  if (r.peakAmplitude < t.stepPeakWarnLow) return 'text-bp-warn';
   return 'text-bp-ink';
+});
+
+/** Footer band legend — tracks the active tune-style profile. */
+const peakBandText = computed(() => {
+  const t = thresholdsFor(view.tuneProfile);
+  return `peak < ${t.stepPeakWarnHigh.toFixed(2)} = clean · `
+    + `${t.stepPeakWarnHigh.toFixed(2)}–${t.stepPeakBadHigh.toFixed(2)} = mild · `
+    + `> ${t.stepPeakBadHigh.toFixed(2)} = hard overshoot`;
 });
 </script>
 
@@ -482,7 +494,7 @@ const peakToneClass = computed(() => {
         </span>
       </div>
       <div class="font-mono text-bp-ink-3">
-        peak &lt; 1.10 = clean &middot; 1.10–1.30 = mild &middot; &gt; 1.30 = hard overshoot
+        {{ peakBandText }}
       </div>
     </footer>
   </section>

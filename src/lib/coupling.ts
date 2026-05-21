@@ -62,11 +62,11 @@ const MIN_CMD_RESPONSE_DEG_S = 20;
  *  the row and the recommender stays silent for it. */
 export const MIN_WINDOWS_FOR_COUPLING = 3;
 
-/** |off-diagonal coupling| at or above this is flagged as significant
- *  — shared by the panel's cell coloring and the recommender. 0.15 =
- *  the responding axis moved 15% as hard as the commanded axis.
- *  TODO calibrate. */
-export const SIGNIFICANT_COUPLING = 0.15;
+// The significance threshold — |off-diagonal coupling| flagged as a
+// fault — is style-dependent (a 3D plane couples axes naturally and
+// tolerates more; a cruiser wants it tighter), so it moved to
+// lib/tuneProfile.ts as `ProfileThresholds.couplingSignificance`, read
+// via the Cruise/Sport/3D dial. Sport keeps the historical 0.15.
 
 export interface CouplingOptions {
   /** Override `RESPONSE_TAIL_MS`. */

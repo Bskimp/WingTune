@@ -57,6 +57,33 @@ describe('PROFILES', () => {
     expect(PROFILES['3d'].filterDelayWarnMs).toBeLessThan(PROFILES.cruise.filterDelayWarnMs);
   });
 
+  test('coupling significance — Sport === today, 3D tolerates more than Cruise', () => {
+    // Sport mirrors the historical SIGNIFICANT_COUPLING constant (0.15).
+    expect(PROFILES.sport.couplingSignificance).toBe(0.15);
+    // 3D flies aggressively — axes couple naturally — so it flags less
+    // (a higher threshold); Cruise wants it tighter.
+    expect(PROFILES.cruise.couplingSignificance)
+      .toBeLessThan(PROFILES.sport.couplingSignificance);
+    expect(PROFILES['3d'].couplingSignificance)
+      .toBeGreaterThan(PROFILES.sport.couplingSignificance);
+  });
+
+  test('step-response peak bands — Sport === today, 3D tolerates more overshoot', () => {
+    // Sport mirrors the current StepResponsePanel traffic-light bands.
+    expect(PROFILES.sport.stepPeakWarnHigh).toBe(1.1);
+    expect(PROFILES.sport.stepPeakBadHigh).toBe(1.3);
+    expect(PROFILES.sport.stepPeakWarnLow).toBe(0.85);
+    // 3D tolerates more overshoot (snap is the point) — higher bands —
+    // but flags a sluggish response sooner (higher undershoot floor).
+    expect(PROFILES['3d'].stepPeakBadHigh)
+      .toBeGreaterThan(PROFILES.sport.stepPeakBadHigh);
+    expect(PROFILES['3d'].stepPeakWarnLow)
+      .toBeGreaterThan(PROFILES.sport.stepPeakWarnLow);
+    // Cruise wants it tight + well-damped — lower overshoot bands.
+    expect(PROFILES.cruise.stepPeakBadHigh)
+      .toBeLessThan(PROFILES.sport.stepPeakBadHigh);
+  });
+
   test('thresholdsFor returns the profile threshold set', () => {
     expect(thresholdsFor('cruise')).toBe(PROFILES.cruise);
     expect(thresholdsFor('3d')).toBe(PROFILES['3d']);

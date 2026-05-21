@@ -23,7 +23,31 @@ plane tolerates less filter delay and lighter damping and wants a higher
 
 ## Status
 
-🚧 **In progress** — started 2026-05-21.
+🚧 **Slices 1-3 done — awaiting test** (2026-05-21). Slice 4 (M-Pilot
+auto-suggest) deferred until M-Pilot ships.
+
+- **Slice 1** — `lib/tuneProfile.ts` + persisted view-store `tuneProfile`
+  + `RecommenderArgs.profile`. Committed `c52ee74`.
+- **Slice 2** — three consumers migrated to profile-aware thresholds:
+  **coupling** (`couplingSignificance` — recommender + CouplingPanel),
+  **filter-delay budget** (`filterDelay{Warn,Bad}Ms` — the spectrumFilter
+  recommender gate + the SpectrumPanel badge), **step-response peak
+  bands** (`stepPeak*` — the StepResponsePanel traffic-light + footer
+  legend). **TPA curve — audited, NOT migrated:** the fit recommends the
+  measured-optimal `tpa_curve_pid_thr0` from the logged scatter; a
+  profile bias would have the tool override its own measurement with a
+  style prior, which is wrong — TPA's thresholds are measurement-quality,
+  not style. (PIDFS shares / input-chain / SPA / airspeed not yet
+  audited — `ProfileThresholds` grows when one proves style-sensitive.)
+- **Slice 3** — `TuneProfileControl.vue`, the three-way selector.
+  **Deviation from the plan:** placed GLOBAL (the AnalysisView controls
+  strip, beside SmoothingControl) rather than the Recommend-tab header —
+  the profile visibly re-tones the Coupling / Spectrum / Step panels
+  too, so a global control is reachable from wherever its effect shows.
+  Resolves open question 4.
+
+333 unit tests, typecheck clean. Sport === today verified — the full
+existing suite passes unchanged with the default profile.
 
 ## The load-bearing safety rule
 

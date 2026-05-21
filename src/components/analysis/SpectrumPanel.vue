@@ -50,6 +50,7 @@ import {
   tintTowardFamily,
   type FamilySpec,
 } from '@/lib/logColors';
+import { thresholdsFor } from '@/lib/tuneProfile';
 import type { FilterConfig, LowPassConfig } from '@/lib/wasmBridge';
 
 const COLORS = {
@@ -103,6 +104,17 @@ const delayBudget = computed<FilterDelayBudget | null>(() => {
   const fc = filterConfig.value;
   if (!fc) return null;
   return computeDelayBudget(fc);
+});
+
+/** Filter-delay badge tone — the warn / red bands track the tune-style
+ *  dial (M-Style): a 3D plane tolerates less delay than a cruiser. */
+const delayTone = computed(() => {
+  const b = delayBudget.value;
+  if (!b) return 'text-bp-ink';
+  const t = thresholdsFor(view.tuneProfile);
+  if (b.totalMs > t.filterDelayBadMs) return 'text-bp-stamp';
+  if (b.totalMs > t.filterDelayWarnMs) return 'text-bp-warn';
+  return 'text-bp-ink';
 });
 
 interface LogEntry {
@@ -633,7 +645,7 @@ const delayBudgetTooltip = computed(() => {
           <div class="font-sans text-[9px] tracking-[0.18em] uppercase font-bold text-bp-ink-3 whitespace-nowrap">filter delay</div>
           <div
             class="font-mono text-[13px]"
-            :class="delayBudget.totalMs > 8 ? 'text-bp-stamp' : delayBudget.totalMs > 5 ? 'text-bp-warn' : 'text-bp-ink'"
+            :class="delayTone"
           >{{ delayBudget.totalMs.toFixed(1) }} ms</div>
         </div>
 

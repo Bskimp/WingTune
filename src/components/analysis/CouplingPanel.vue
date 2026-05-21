@@ -22,13 +22,14 @@
 import { computed, onMounted } from 'vue';
 
 import { useActiveLog } from '@/composables/useActiveLog';
+import { useViewStore } from '@/stores/view';
 import { detectManeuvers } from '@/lib/maneuverDetect';
 import {
   analyzeCoupling,
   MIN_WINDOWS_FOR_COUPLING,
-  SIGNIFICANT_COUPLING,
   type CouplingResult,
 } from '@/lib/coupling';
+import { thresholdsFor } from '@/lib/tuneProfile';
 
 type Axis = 0 | 1 | 2;
 type HealthTone = 'green' | 'yellow' | 'red' | 'dim';
@@ -54,6 +55,12 @@ const WANTED_FIELDS = [
 
 const logStore = useActiveLog();
 const { time, fields, hydrating } = logStore;
+
+const view = useViewStore();
+
+/** Active significance threshold from the tune-style dial (M-Style) — a
+ *  3D profile tolerates more cross-axis coupling than a cruiser. */
+const sig = computed(() => thresholdsFor(view.tuneProfile).couplingSignificance);
 
 onMounted(() => { logStore.ensureFields(WANTED_FIELDS); });
 
@@ -89,10 +96,11 @@ const ready = computed(() =>
 );
 
 /** Tone for an off-diagonal |coupling| magnitude. Green below the
- *  significance threshold, red at twice it. */
-function cellTone(magnitude: number): HealthTone {
-  if (magnitude >= 2 * SIGNIFICANT_COUPLING) return 'red';
-  if (magnitude >= SIGNIFICANT_COUPLING) return 'yellow';
+ *  significance threshold (`sigVal`, from the active tune-style
+ *  profile), red at twice it. */
+function cellTone(magnitude: number, sigVal: number): HealthTone {
+  if (magnitude >= 2 * sigVal) return 'red';
+  if (magnitude >= sigVal) return 'yellow';
   return 'green';
 }
 
@@ -145,7 +153,7 @@ const gridRows = computed<CouplingRow[]>(() => {
           `${cmd.label} inputs perturb ${resp.label.toLowerCase()} by ~${magnitudePct}%`
           + ` · only ${windows}/${MIN_WINDOWS_FOR_COUPLING} windows — low confidence`;
       } else {
-        tone = cellTone(magnitude);
+        tone = cellTone(magnitude, sig.value);
         title =
           `${cmd.label} inputs perturb ${resp.label.toLowerCase()} by ${magnitudePct}%`
           + ` (signed ${value >= 0 ? '+' : ''}${value.toFixed(2)}) · ${windows} windows`
@@ -194,7 +202,7 @@ const worstText = computed(() => {
 });
 const worstTone = computed<HealthTone>(() => {
   const w = worstTrusted.value;
-  return w ? cellTone(Math.abs(w.value)) : 'dim';
+  return w ? cellTone(Math.abs(w.value), sig.value) : 'dim';
 });
 
 const pendingMessage = computed(() => {
@@ -211,7 +219,7 @@ const pendingMessage = computed(() => {
   return 'computing cross-axis coupling…';
 });
 
-const flagPct = Math.round(SIGNIFICANT_COUPLING * 100);
+const flagPct = computed(() => Math.round(sig.value * 100));
 </script>
 
 <template>

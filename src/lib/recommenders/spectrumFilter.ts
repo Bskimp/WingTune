@@ -16,6 +16,7 @@
 
 import { estimateSampleRate, welchPsd } from '@/lib/spectrum';
 import { computeDelayBudget } from '@/lib/filterDelay';
+import { resolveTuneProfile, thresholdsFor } from '@/lib/tuneProfile';
 import type { Recommendation, Recommender } from '@/lib/recommendations';
 
 export const spectrumFilterRequiredFields: readonly string[] = [
@@ -29,7 +30,6 @@ const PEAK_FLOOR_HZ = 30;       // skip DC/low-freq drift
 const PEAK_CEILING_HZ = 400;    // most BF wings — peaks above this are typically not actionable
 const PEAK_HEIGHT_DB = 6;       // peak must be ≥ this many dB above the local baseline
 const NEIGHBORHOOD_BINS = 10;   // ± bins for local-baseline calc
-const DELAY_BUDGET_LIMIT_MS = 8;
 
 export interface SpectrumPeak {
   freqHz: number;
@@ -99,8 +99,12 @@ function suggestedNotchRange(
   return { min: currentMin, max: currentMax };
 }
 
-export const spectrumFilterRecommender: Recommender = ({ filterConfig, fields, time }) => {
+export const spectrumFilterRecommender: Recommender = ({ filterConfig, fields, time, profile }) => {
   const recs: Recommendation[] = [];
+  // M-Style: the filter-delay budget is style-sensitive — a 3D plane
+  // wants the chain shorter (delay is the enemy of crisp response); a
+  // cruiser trades latency for smoothness.
+  const delayLimitMs = thresholdsFor(resolveTuneProfile(profile)).filterDelayBadMs;
 
   // ---- (1) Notch coverage check ------------------------------------------
   // Only runs when we actually know what notch range the user is on.
@@ -179,7 +183,7 @@ export const spectrumFilterRecommender: Recommender = ({ filterConfig, fields, t
   // ---- (2) Filter delay budget check -------------------------------------
   if (filterConfig) {
     const budget = computeDelayBudget(filterConfig);
-    if (budget.totalMs > DELAY_BUDGET_LIMIT_MS && budget.stages.length > 0) {
+    if (budget.totalMs > delayLimitMs && budget.stages.length > 0) {
       const sorted = [...budget.stages].sort((a, b) => b.delayMs - a.delayMs);
       const heaviest = sorted[0];
       const breakdown = budget.stages
@@ -193,11 +197,11 @@ export const spectrumFilterRecommender: Recommender = ({ filterConfig, fields, t
         title: `Filter chain delay is ${budget.totalMs.toFixed(1)} ms — consider trimming`,
         summary:
           `Total group delay through the gyro + D-term filter chain is ${budget.totalMs.toFixed(1)} ms ` +
-          `(target ≤ ${DELAY_BUDGET_LIMIT_MS} ms). Heaviest stage: ${heaviest.name} (${heaviest.delayMs.toFixed(1)} ms).`,
+          `(target ≤ ${delayLimitMs} ms). Heaviest stage: ${heaviest.name} (${heaviest.delayMs.toFixed(1)} ms).`,
         detail:
           `Per-stage breakdown:\n${breakdown}\n  ────────────\n  total: ${budget.totalMs.toFixed(2)} ms\n\n` +
           `Excess filter delay degrades closed-loop responsiveness — the PID controller is reacting to ` +
-          `older gyro samples than necessary. Wing tuning rule of thumb: keep total under ~${DELAY_BUDGET_LIMIT_MS} ms.\n\n` +
+          `older gyro samples than necessary. Wing tuning rule of thumb: keep total under ~${delayLimitMs} ms.\n\n` +
           `Common levers (each is a tradeoff — depends on what noise you actually have):\n` +
           `  · Reduce dyn-notch count if peaks are concentrated rather than spread across the band.\n` +
           `  · Lower dyn-notch Q (faster but lets more noise through).\n` +
@@ -207,7 +211,7 @@ export const spectrumFilterRecommender: Recommender = ({ filterConfig, fields, t
         cli: [],
         confidence: 'yellow',
         criteria_met: [
-          `Total filter delay ${budget.totalMs.toFixed(1)} ms exceeds ${DELAY_BUDGET_LIMIT_MS} ms target`,
+          `Total filter delay ${budget.totalMs.toFixed(1)} ms exceeds ${delayLimitMs} ms target`,
           `Heaviest stage identified: ${heaviest.name}`,
         ],
         criteria_failed: [

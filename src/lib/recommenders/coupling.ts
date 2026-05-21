@@ -13,8 +13,8 @@ import { detectManeuvers } from '@/lib/maneuverDetect';
 import {
   analyzeCoupling,
   MIN_WINDOWS_FOR_COUPLING,
-  SIGNIFICANT_COUPLING,
 } from '@/lib/coupling';
+import { resolveTuneProfile, thresholdsFor } from '@/lib/tuneProfile';
 import type { Recommendation, Recommender, AxisShort } from '@/lib/recommendations';
 
 export const couplingRequiredFields: readonly string[] = [
@@ -25,7 +25,7 @@ export const couplingRequiredFields: readonly string[] = [
 const AXIS_LABEL = ['Roll', 'Pitch', 'Yaw'] as const;
 const AXIS_SHORT: Record<0 | 1 | 2, AxisShort> = { 0: 'R', 1: 'P', 2: 'Y' };
 
-export const couplingRecommender: Recommender = ({ fields, time }) => {
+export const couplingRecommender: Recommender = ({ fields, time, profile }) => {
   const out: Recommendation[] = [];
   if (time.length < 3) return out;
 
@@ -38,7 +38,10 @@ export const couplingRecommender: Recommender = ({ fields, time }) => {
   if (maneuvers.length === 0) return out;
 
   const result = analyzeCoupling({ gyro, time, maneuvers });
-  const flagPct = Math.round(SIGNIFICANT_COUPLING * 100);
+  // M-Style: the significance threshold tracks the tune-style dial — a
+  // 3D plane tolerates more cross-axis coupling than a cruiser.
+  const sig = thresholdsFor(resolveTuneProfile(profile)).couplingSignificance;
+  const flagPct = Math.round(sig * 100);
 
   for (let c = 0 as 0 | 1 | 2; c <= 2; c = (c + 1) as 0 | 1 | 2) {
     const windows = result.sampleCount[c];
@@ -49,14 +52,14 @@ export const couplingRecommender: Recommender = ({ fields, time }) => {
       const value = result.matrix[c][r];
       if (!Number.isFinite(value)) continue;
       const magnitude = Math.abs(value);
-      if (magnitude < SIGNIFICANT_COUPLING) continue;
+      if (magnitude < sig) continue;
 
       const cmd = AXIS_LABEL[c];
       const resp = AXIS_LABEL[r];
       const respLower = resp.toLowerCase();
       const cmdLower = cmd.toLowerCase();
       const pct = Math.round(magnitude * 100);
-      const strong = magnitude >= 2 * SIGNIFICANT_COUPLING;
+      const strong = magnitude >= 2 * sig;
 
       out.push({
         id: `coupling-${AXIS_SHORT[c].toLowerCase()}-${AXIS_SHORT[r].toLowerCase()}`,
@@ -95,7 +98,8 @@ export const couplingRecommender: Recommender = ({ fields, time }) => {
         criteria_failed: [
           'cross-axis coupling has no firmware fix — diagnosis is mixer / CG / mechanical,'
             + ' corrected off-tool, so no CLI is emitted',
-          'the significance threshold is a wing-regime first guess, not yet corpus-calibrated',
+          'the significance threshold tracks the Cruise/Sport/3D tune-style dial — the'
+            + ' per-style values are first guesses, not yet corpus-calibrated',
         ],
       });
     }

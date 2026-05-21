@@ -34,6 +34,7 @@ import LogRoster from '@/components/LogRoster.vue';
 import TimeBar from '@/components/analysis/TimeBar.vue';
 import CursorReadout from '@/components/analysis/CursorReadout.vue';
 import SmoothingControl from '@/components/SmoothingControl.vue';
+import TuneProfileControl from '@/components/TuneProfileControl.vue';
 import TrackingTab from '@/components/analysis/TrackingTab.vue';
 import ServosTab from '@/components/analysis/ServosTab.vue';
 import AirspeedPanel from '@/components/analysis/AirspeedPanel.vue';
@@ -107,6 +108,7 @@ watchEffect(() => {
     <div class="mt-2.5">
       <TimeBar />
       <CursorReadout />
+      <TuneProfileControl v-if="session.logs.size >= 1" />
       <SmoothingControl v-if="showSmoothing" />
     </div>
 

@@ -29,6 +29,18 @@ export interface ProfileThresholds {
    *  enemy of crisp response); a cruiser trades latency for smoothness. */
   filterDelayWarnMs: number;
   filterDelayBadMs: number;
+  /** M-Coupling significance threshold — |off-diagonal coupling| at or
+   *  above this fraction is flagged. 3D tolerates more (aggressive
+   *  flight couples axes naturally); a cruiser wants it tighter. */
+  couplingSignificance: number;
+  /** M-Step step-response peak amplitude bands. A peak above
+   *  `stepPeakBadHigh` is hard overshoot; above `stepPeakWarnHigh`,
+   *  mild; below `stepPeakWarnLow`, sluggish / over-damped. 3D
+   *  tolerates more overshoot (snap is the point) yet flags a sluggish
+   *  response sooner; a cruiser wants it tight + well-damped. */
+  stepPeakWarnHigh: number;
+  stepPeakBadHigh: number;
+  stepPeakWarnLow: number;
 }
 
 export interface ProfileMeta {
@@ -64,16 +76,31 @@ export const PROFILES: Record<TuneProfile, ProfileThresholds> = {
   cruise: {
     filterDelayWarnMs: 7, // TODO calibrate
     filterDelayBadMs: 11, // TODO calibrate
+    couplingSignificance: 0.12, // TODO calibrate
+    stepPeakWarnHigh: 1.08, // TODO calibrate
+    stepPeakBadHigh: 1.22, // TODO calibrate
+    stepPeakWarnLow: 0.80, // TODO calibrate
   },
   sport: {
-    // Sport === today: matches the current filter-delay badge bands
-    // (green < 5 ms / orange 5-8 / red > 8).
+    // Sport === today: every value matches the current hardcoded
+    // constant — the filter-delay badge bands (green < 5 ms / orange
+    // 5-8 / red > 8), the historical SIGNIFICANT_COUPLING (0.15), and
+    // the StepResponsePanel peak bands (clean < 1.10 / mild < 1.30 /
+    // sluggish < 0.85). Selecting Sport is a behavioural no-op.
     filterDelayWarnMs: 5,
     filterDelayBadMs: 8,
+    couplingSignificance: 0.15,
+    stepPeakWarnHigh: 1.10,
+    stepPeakBadHigh: 1.30,
+    stepPeakWarnLow: 0.85,
   },
   '3d': {
     filterDelayWarnMs: 3.5, // TODO calibrate
     filterDelayBadMs: 6, // TODO calibrate
+    couplingSignificance: 0.22, // TODO calibrate
+    stepPeakWarnHigh: 1.15, // TODO calibrate
+    stepPeakBadHigh: 1.45, // TODO calibrate
+    stepPeakWarnLow: 0.90, // TODO calibrate
   },
 };
 
