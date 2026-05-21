@@ -5,12 +5,28 @@ Long-form documents and reference snapshots for WingTune. Skills under
 
 ## Planning
 
-- [wingtune-roadmap.md](wingtune-roadmap.md) — long-arc design doc (v0.7).
+- [wingtune-roadmap.md](wingtune-roadmap.md) — long-arc design doc.
   Vision, three-layer architecture, milestones M1–M7, risk register, firmware
   companion PR scope.
-- [wingtune-m1-execution.md](wingtune-m1-execution.md) — current detailed M1
-  execution plan (rev 8). M1.0 through M1.7, exit criteria, TypeScript stubs
-  for load-bearing pieces.
+- [wingtune-m1-execution.md](wingtune-m1-execution.md) — the M1 execution
+  plan. M1 is complete; kept as a frozen historical record.
+- [wingtune-analytics-plan.md](wingtune-analytics-plan.md) — the post-M7
+  analytics milestones (M-FF, M-Coupling, M-Servo-2, M-Pilot, M-Style, …) —
+  the live "what's the next milestone" doc.
+- [wingtune-spectrum-roadmap.md](wingtune-spectrum-roadmap.md) — the
+  Spectrum-tab track (S1 per-stage filter sim, S2 airspeed-resolved spectra).
+- `wingtune-m-*-execution.md` / `wingtune-s2-execution.md` — per-milestone
+  slice-by-slice execution plans, written when each milestone is picked up.
+- [wingtune-tab-guide.md](wingtune-tab-guide.md) — per-tab walkthrough: what
+  each panel shows and how to read it.
+- [wingtune-tuning-workflow.md](wingtune-tuning-workflow.md) — the end-to-end
+  fresh-flash-to-validated-wing tuning workflow.
+- [wingtune-calibration-flights.md](wingtune-calibration-flights.md) — the
+  purpose-built sorties that turn the tool's first-guess thresholds into
+  calibrated values.
+
+`CLAUDE.md` at the repo root is the authoritative live state-of-the-project
+doc — these are the reasoning behind it.
 
 ## Firmware companion PR
 

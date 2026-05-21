@@ -11,6 +11,12 @@ data behind the rec → make the BF CLI change → fly again → compare.**
 Multi-log compare exists for the last step — drop two logs into the
 LogRoster, the panels stack the traces so you can see what changed.
 
+The **Tune Profile dial** (Cruise / Sport / 3D) sits in the controls
+strip under the time bar — it reweights the recommendation and panel
+thresholds for your flying style: a 3D wing tolerates less filter
+delay and more overshoot than a relaxed cruiser. Default Sport is the
+neutral all-rounder.
+
 ---
 
 ## Summary
@@ -290,37 +296,72 @@ ratio which produced sample-level spikes; that's fixed.
 
 ## Spectrum
 
-Welch PSD of gyro per axis, with filter coverage overlays + delay
+Four stacked panels — the spectral workbench. Top to bottom:
+whole-log PSD, per-stage filter sim, airspeed×frequency spectrogram,
+sub-3 Hz airframe modes.
+
+### Whole-log PSD (SpectrumPanel)
+
+Welch PSD of gyro per axis, with filter coverage overlays + a delay
 budget badge.
 
 **What you're looking at:** log-frequency, dB-magnitude PSD of the
 gyro signal. Drag to zoom; chips toggle Roll/Pitch/Yaw and select
 raw / filt / both. Overlay markers show dyn-notch coverage band,
 LPF cutoff lines, RPM filter centers — each togglable independently.
-Header badge shows total filter group-delay budget (green < 5 ms /
-orange 5-8 / red > 8).
+Header badge shows total filter group-delay budget — the warn / red
+bands track the Tune Profile dial (Sport default green < 5 ms /
+orange 5-8 / red > 8; a 3D profile tightens them).
 
 **What it tells you:**
 - **Peak in raw gyro 6+ dB above local baseline** that the dyn-notch
   isn't covering → the recommender flags it; consider extending the
   notch range.
-- **Filter delay > 8 ms** → filter chain is eating closed-loop
-  headroom; trim by raising the heaviest stage's cutoff or removing a
-  redundant filter (the recommender names the heaviest stage).
+- **Filter delay into the badge's red band** → filter chain is eating
+  closed-loop headroom; trim by raising the heaviest stage's cutoff or
+  removing a redundant filter (the recommender names the heaviest).
 - **Raw vs filt comparison shows huge mid-band attenuation** → filter
-  chain is suppressing flight-relevant frequencies as well as noise;
-  the tradeoff is biting.
+  chain is suppressing flight-relevant frequencies as well as noise.
 
-**Tuning workflow:** open Spectrum, switch to `both` (raw + filt
-overlay). Anywhere the raw trace has peaks that the filt trace
-doesn't, the filter chain is doing its job. Anywhere both traces
-match, the filter isn't doing anything in that band — could be
-trimmed. The header delay badge is the primary tuning lever; the
-peak-detection recommender is for finding specific noise sources.
+### Per-stage filter simulation (FilterSimPanel)
+
+Replays Betaflight's gyro filter chain on the logged raw gyro so each
+stage — RPM filter, LPF1, dynamic notch — becomes a toggle: answers
+"what is this one filter actually removing." A `simFidelity` badge
+says how closely the simulated full chain reproduces the logged
+gyroADC; when it's low (the dyn-notch self-track is the approximation)
+the per-stage view is flagged unreliable rather than shown as fact.
+
+### Airspeed × frequency spectrogram (AirspeedSpectrogramPanel)
+
+Gyro STFT columns binned by airspeed instead of averaged whole-flight
+— a heatmap: x = airspeed, y = frequency, colour = power. A peak that
+climbs the airspeed axis is a speed-dependent resonance (control-
+surface buzz, a flutter precursor) — exactly what a whole-log PSD
+smears away. Airspeed-source toggle: the M3 model estimate, or GPS
+groundspeed. Under-sampled airspeed bins are faded.
+
+### Sub-3 Hz airframe modes (LowFreqModePanel)
+
+A long-window FFT of the band below 3 Hz, where a wing's slow
+rigid-body modes live — phugoid (~0.02-0.12 Hz), dutch roll
+(~0.15-1.2 Hz), short period (~0.4-3 Hz). Detected peaks are labelled
+by mode (frequency band + axis); each band carries a resolved flag
+(the phugoid needs ~100 s of continuous flight to resolve). A peak
+here is an airframe dynamic — a CG / tail-volume / dihedral
+diagnostic — not motor noise. Diagnostic-only, no recommender.
+
+**Tuning workflow:** for filter work, use the whole-log PSD in `both`
+mode (raw + filt overlay) — where the raw trace peaks and the filt
+trace doesn't, the chain is working; where they match, that band
+isn't being filtered and could be trimmed. FilterSim attributes the
+effect to a specific stage. The delay badge is the primary lever.
+The spectrogram + airframe-mode panels are exploratory — read them
+when chasing a speed-dependent buzz or a slow oscillation.
 
 **Caveats:** wings have interesting noise in sub-50 Hz, NOT the
-50-500 Hz quad band. Quad-side tutorials about FFT analysis
-generally don't translate without rescaling the bands.
+50-500 Hz quad band — quad-side FFT tutorials don't translate without
+rescaling. The delay badge's bands shift with the Tune Profile dial.
 
 ---
 

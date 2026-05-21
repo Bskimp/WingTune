@@ -16,8 +16,8 @@ don't re-litigate it later.
 ## Priority order
 
 > **Status (2026-05-21):** items 1 (M-FF), 2 (M-Coupling), 3
-> (M-FilterSim / Spectrum-roadmap S1) and 4 (Spectrum-roadmap S2)
-> shipped. **M-Style — the tune-style dial — is the next milestone.**
+> (M-FilterSim / Spectrum-roadmap S1), 4 (Spectrum-roadmap S2) and
+> 5 (M-Style) shipped. **M-Servo-2 is the next milestone.**
 
 1. ~~**M-FF — Feedforward effectiveness + maneuver detection**~~ —
    ✅ **shipped** abff4fa (2026-05-19)
@@ -28,9 +28,10 @@ don't re-litigate it later.
 4. ~~**Airspeed-resolved spectra (S2)**~~ — airspeed×frequency
    spectrogram + low-frequency airframe-mode detection —
    ✅ **shipped** 2026-05-21, see `docs/wingtune-s2-execution.md`
-5. **M-Style — Tune-style profiles (the "style dial")** ← **next** —
-   Cruise / Sport / 3D, shifts every recommender's thresholds + targets
-6. **M-Servo-2 — Servo hunt + airframe transfer function**
+5. ~~**M-Style — Tune-style profiles (the "style dial")**~~ —
+   ✅ **shipped** 2026-05-21 (`c52ee74` + `f1d9030`), see
+   `docs/wingtune-m-style-execution.md`
+6. **M-Servo-2 — Servo hunt + airframe transfer function** ← **next**
 7. **M-Pilot — Pilot-input style analysis** — feeds M-Style's auto-detect
 8. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
    folds into the existing Airspeed panel)
@@ -220,7 +221,16 @@ That distinction changes the tuning advice.
 
 ---
 
-## M-Style — Tune-style profiles (the "style dial")
+## M-Style — Tune-style profiles (the "style dial") ✅ SHIPPED
+
+> ✅ Shipped 2026-05-21 (Slices 1-3; commits `c52ee74` + `f1d9030`):
+> `lib/tuneProfile.ts`, the persisted `view.tuneProfile`,
+> `TuneProfileControl.vue`, and the coupling / filter-delay /
+> step-response thresholds migrated to be profile-aware. TPA audited
+> + deliberately not migrated. Slice 4 (M-Pilot auto-suggest)
+> deferred until M-Pilot ships. Execution detail:
+> `docs/wingtune-m-style-execution.md`. The notes below are the
+> original design intent.
 
 **Why:** every recommender emits thresholds and CLI targets against an
 implicit "default wing." But the *same log* should produce different

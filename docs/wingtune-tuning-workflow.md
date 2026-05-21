@@ -23,6 +23,13 @@ because that's the only way to know which change moved the needle.
 - "Multi-log compare" = use the `+` button on the LogRoster strip to
   add a second log; click `auto-align` to put them on a common
   session time axis; then any time-domain panel overlays both.
+- **Tune Profile dial** — the Cruise / Sport / 3D selector in
+  WingTune's controls strip reweights the recommendation + panel
+  thresholds for your flying style. Set it once to match the wing
+  you're tuning (3D / aggressive vs relaxed cruiser); Sport is the
+  neutral default and a behavioural no-op. It shifts the filter-delay,
+  cross-axis-coupling and step-response bands the phases below lean on
+  — so a 3D wing is held to tighter delay and looser overshoot.
 
 ---
 

@@ -17,11 +17,11 @@ deviations (documented inline + summarised under "Deviations from
 plan" at the bottom). Test results: 137/137 unit + 5/5 wasm tests
 pass. Browser-verified on Brian's btfl_001/002/008 corpus.
 
-**M1.7.1 time-alignment follow-up:** scaffold shipped (the
-`useAlignedTime` composable + per-log `timeOffsetSec` field on
-LogState + 6-case test suite). Remaining work is the drag-to-align
-UI handle + adopting the composable in at least one chart panel —
-estimated ~1.5–2 days when picked up.
+**M1.7.1 time-alignment follow-up:** ✅ shipped 2026-05-18 — the
+`useAlignedTime` composable + per-log `timeOffsetSec`, the
+drag-to-align roster handle, and ServoPanel adopting session time as
+its x-axis. (This doc is a frozen M1.7 record; `CLAUDE.md` carries
+live status.)
 
 ## What this milestone is for
 

@@ -41,9 +41,10 @@ suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M-FF feedforward /
 maneuver-detection + M-Coupling cross-axis matrix + M1.7 multi-log
 compare + M1.7.1 time-alignment UI all shipped.** Analytics-plan
 milestones M-FF + M-Coupling + M-FilterSim (S1) +
-Spectrum-roadmap S2 (airspeed-resolved spectra) closed
-2026-05-19/21; **M-Style — the Cruise/Sport/3D tune-style dial —
-is the next milestone** — see `docs/wingtune-analytics-plan.md`.
+Spectrum-roadmap S2 (airspeed-resolved spectra) + M-Style
+(Cruise/Sport/3D tune-style dial) closed 2026-05-19/21;
+**M-Servo-2 is the next milestone** — see
+`docs/wingtune-analytics-plan.md`.
 Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
@@ -672,6 +673,30 @@ bearing design decisions.
   scalogram) deferred. Plans: `docs/wingtune-spectrum-roadmap.md` +
   `docs/wingtune-s2-execution.md`.
 
+- **M-Style — tune-style profiles / the "style dial" (2026-05-21,
+  commits `c52ee74` + `f1d9030`).** A global Cruise / Sport / 3D
+  selector (`TuneProfileControl.vue`, in the AnalysisView controls
+  strip beside SmoothingControl) that reweights the recommenders' +
+  panels' thresholds — not new analysis, an interpretation layer.
+  `lib/tuneProfile.ts`: the `TuneProfile` type, a `ProfileThresholds`
+  set per profile, `resolveTuneProfile`. The view store carries a
+  `tuneProfile` ref persisted to `localStorage` (the project's first
+  persisted view setting); `RecommenderArgs` carries `profile`. Three
+  consumers migrated to profile-aware thresholds: coupling
+  (`couplingSignificance` — `SIGNIFICANT_COUPLING` moved out of
+  `lib/coupling.ts`), filter-delay budget (`filterDelay{Warn,Bad}Ms`
+  — the spectrumFilter recommender gate + the SpectrumPanel badge),
+  step-response peak bands (`stepPeak*` — the StepResponsePanel
+  traffic-light + footer). TPA audited + deliberately NOT migrated:
+  its fit recommends the measured-optimal `pid_thr0` from the logged
+  scatter, so a profile bias would override a measurement with a
+  style prior — TPA's thresholds are measurement-quality, not style.
+  **Sport === today** — every Sport threshold equals the old
+  hardcoded constant, so the default profile is a behavioural no-op
+  (the full existing suite passes unchanged). Slice 4 (M-Pilot
+  auto-suggest) deferred until M-Pilot ships. 333 unit tests. Plan:
+  `docs/wingtune-m-style-execution.md`.
+
 **In flight / pending:**
 
 - **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
@@ -727,17 +752,18 @@ bearing design decisions.
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** both Spectrum-tab
-roadmap milestones shipped (S1 2026-05-20, S2 2026-05-21) — the
-Spectrum tab is now a four-panel spectral workbench (multi-log PSD
-compare, per-stage filter sim, airspeed×frequency spectrogram,
-sub-3 Hz airframe modes). **M-Style (analytics-plan priority #5 —
-the Cruise/Sport/3D "tune-style dial" that reweights every
-recommender's thresholds + targets) is the next milestone**; see
-`docs/wingtune-analytics-plan.md`. All other near-term work is
+**Immediate next step when resuming code work:** M-Style (the
+Cruise/Sport/3D tune-style dial) shipped 2026-05-21 — Slices 1-3
+done, Slice 4 (M-Pilot auto-suggest) deferred until M-Pilot ships.
+**M-Servo-2 (analytics-plan priority #6 — servo hunt detection +
+airframe transfer function) is the next milestone**; see
+`docs/wingtune-analytics-plan.md`. No execution doc yet — write one
+when M-Servo-2 is picked up. All other near-term work is
 flight-blocked (M-Coupling's three calibration knobs want a
 single-axis-snap flight; M-FilterSim's simFidelity-threshold and
-S2's peak-detection / smoothing knobs want more corpus logs; Step
+S2's peak-detection / smoothing knobs want more corpus logs;
+M-Style's per-profile Cruise / 3D thresholds want corpus logs flown
+in each style; Step
 recommender threshold recalibration needs a clean F=0+S=0
 PD-isolated reference flight; M3/M5/M6/M7 visual validation needs
 throttle-varying cruise) or held on Brian's call (upstream

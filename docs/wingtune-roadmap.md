@@ -45,20 +45,19 @@
 
 ## Status
 
-**Wing analytics suite (M2 / M3 / M5 / M6 / M7) complete** as of 2026-05-17 — every wing-specific analysis module on this doc has shipped its first slice with panel + recommender + tests. M1 foundation + M1.5 header inspector + M1.6 readiness report + M4 spectrum tab + M-Step closed-loop deconvolution all landed. Tauri shell now opens via the native dialog; field cache has LRU eviction; scan-progress shows an estimated bar; airspeed readiness is split into BASIC-fit vs DEBUG_TPA-cross-check rows. Generic Nelder-Mead optimiser shared by the airspeed + TPA fits.
+This roadmap is the **long-arc design reference** — vision, the
+three-layer architecture, milestones M1–M7, the risk register. It is
+deliberately NOT the live status tracker: `CLAUDE.md` is the
+authoritative state-of-the-project doc, and
+`docs/wingtune-analytics-plan.md` tracks the post-M7 analytics
+milestones.
 
-**Held on flight data** (not code work): M3 + M5 + M6 + M7 + M4-raw-gyro visual validation against debug-mode calibration sorties. BF logs one debug mode per flight so these are four separate test flights. Current corpus logs (LOG00113, btfl_002) don't have the right debug modes; panels correctly surface blocked/missing pending states.
-
-**Still pending in code:**
-
-- M1.0 corpus assembly track (not started).
-- M1.7 multi-log compare (not started — persistence dropped, see M1.7 section).
-- Real Rust scan-progress callback (interim estimated bar shipped; true byte-level progress needs Rust callback threading + WASM rebuild + worker plumbing).
-- Step-response settling-metric calibration vs PIDscope (shape character matches PIDtoolbox; amplitude calibration held on PIDscope's log loader).
-- Verify `tpa_factor` is DEBUG_TPA channel 2 (signal-registry TODO).
-- Upstream `blackbox-log` PR (held — Brian's call).
-
-The detailed status of every Done item lives in `CLAUDE.md`; that file is the authoritative state-of-the-project doc for resuming work.
+As of 2026-05-21: M1–M7, M-Servo, and the analytics-plan milestones
+(M-FF, M-Coupling, M-FilterSim / Spectrum-roadmap S1, S2 airspeed-
+resolved spectra, M-Style tune-style dial) have all shipped — 333 unit
+tests. The next milestone is M-Servo-2. Remaining non-code work is
+flight-data-blocked visual validation (M3/M5/M6/M7 calibration sorties)
+and Brian-held upstream PRs. See `CLAUDE.md` for the live detail.
 
 ## Vision
 

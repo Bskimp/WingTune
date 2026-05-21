@@ -120,6 +120,21 @@ applies cross-recommender invariants (e.g. don't emit a TPA-curve
 rec if the airspeed-fit blocking it is red). Bypassing the
 aggregator means losing those guarantees.
 
+### I9. Style-sensitive thresholds come from the tune-style profile.
+
+A recommender whose flag threshold legitimately depends on flying
+style — cruise vs aggressive/3D, e.g. a filter-delay budget, an
+overshoot band, a coupling-significance cutoff — must read it from
+the active profile (`thresholdsFor(resolveTuneProfile(args.profile))`,
+M-Style / `lib/tuneProfile.ts`), NOT a file-scope constant.
+Hard-coding it makes the Cruise/Sport/3D dial silently wrong for that
+recommender. The `sport` profile value MUST equal the historical
+constant so the default stays a behavioural no-op. Not every
+threshold is style-sensitive — a measurement-quality gate (fit RMS,
+sample count, convergence) is style-independent; audit before
+migrating, and a "not migrated" audit conclusion is legitimate (TPA
+curve fit is the worked example — see `wingtune-m-style-execution.md`).
+
 ## When this skill triggers
 
 - New file under `src/lib/recommenders/`
@@ -148,6 +163,9 @@ For a new recommender:
       per-recommender threshold is named in TSDoc
 - [ ] Recommender is registered in `gatherRecommendations`, not
       called from a panel directly
+- [ ] Any style-sensitive threshold reads from the tune-style profile
+      (M-Style), not a hard-coded constant; the `sport` value equals
+      the historical constant (I9)
 - [ ] If emitting CLI on yellow, TSDoc names the specific criteria
       whose failure is non-blocking and why
 
