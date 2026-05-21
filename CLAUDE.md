@@ -40,8 +40,9 @@ M1 functionally complete (corpus track aside). **Wing analytics
 suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M-FF feedforward /
 maneuver-detection + M-Coupling cross-axis matrix + M1.7 multi-log
 compare + M1.7.1 time-alignment UI all shipped.** Analytics-plan
-milestones M-FF + M-Coupling closed 2026-05-19/20; **M-Servo-2 is
-the next milestone** (analytics-plan priority #3).
+milestones M-FF + M-Coupling closed 2026-05-19/20; **M-FilterSim
+(S1) is the next milestone** — per-stage filter simulation, see
+`docs/wingtune-spectrum-roadmap.md`.
 Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
@@ -675,13 +676,14 @@ bearing design decisions.
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** the analytics
-expansion plan (`docs/wingtune-analytics-plan.md`) drives from
-here. M-FF (priority #1, abff4fa) and M-Coupling (priority #2,
-e5f9d87) are both shipped. **M-Servo-2 — servo hunt + airframe
-transfer function (analytics-plan priority #3) — is the next
-milestone**; no execution doc yet, write one when it's picked up
-per the analytics-plan convention. All other near-term work is
+**Immediate next step when resuming code work:** the Spectrum-tab
+roadmap (`docs/wingtune-spectrum-roadmap.md`) is now front-and-
+centre — M-FF (abff4fa) and M-Coupling (e5f9d87) shipped, and the
+Spectrum work was pulled ahead of M-Servo-2. **M-FilterSim (S1) —
+per-stage filter simulation — is the active milestone**; execution
+detail in `docs/wingtune-m-filtersim-execution.md`. The next code
+step is Slice 1: `lib/stft.ts`, a windowed short-time FFT over the
+existing radix-2 FFT, shared with S2. All other near-term work is
 flight-blocked (M-Coupling's three calibration knobs want a
 single-axis-snap flight; Step recommender threshold recalibration
 needs a clean F=0+S=0 PD-isolated reference flight; M3/M5/M6/M7

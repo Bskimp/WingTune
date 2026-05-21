@@ -16,27 +16,32 @@ don't re-litigate it later.
 ## Priority order
 
 > **Status (2026-05-20):** items 1 (M-FF, `abff4fa`) and 2
-> (M-Coupling, `e5f9d87`) shipped; the display-smoothing slider
-> shipped too (`d28c836`). Item 3 (M-Servo-2) is next — no
-> execution doc yet (written when a milestone is picked up).
+> (M-Coupling, `e5f9d87`) shipped. The Spectrum-tab work — M-FilterSim
+> and the airspeed-resolved spectra — has been pulled front and centre
+> into items 3-4; see `docs/wingtune-spectrum-roadmap.md` for the
+> worked-out sequencing. **M-FilterSim (S1) is the active milestone** —
+> execution detail in `docs/wingtune-m-filtersim-execution.md`.
 
 1. ~~**M-FF — Feedforward effectiveness + maneuver detection**~~ —
    ✅ **shipped** abff4fa (2026-05-19)
 2. ~~**M-Coupling — Cross-axis coupling matrix**~~ —
    ✅ **shipped** e5f9d87 (2026-05-20)
-3. **M-Servo-2 — Servo hunt + airframe transfer function** ← **next**
-4. **M-Pilot — Pilot-input style analysis**
-5. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
+3. **M-FilterSim (S1) — per-stage filter simulation** ← **active** —
+   see `docs/wingtune-spectrum-roadmap.md`
+4. **Airspeed-resolved spectra (S2)** — airspeed×frequency spectrogram
+   + low-frequency airframe-mode detection — see
+   `docs/wingtune-spectrum-roadmap.md`
+5. **M-Servo-2 — Servo hunt + airframe transfer function**
+6. **M-Pilot — Pilot-input style analysis**
+7. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
    folds into the existing Airspeed panel)
-6. **M-FilterSim — interactive per-stage filter preview** (simulate
-   the BF filter chain; foundation for the wing filter estimator)
-7. **Craft persistence infrastructure** — needs its own design pass
+8. **Craft persistence infrastructure** — needs its own design pass
    before any of the above can have a longitudinal-history feature
-8. **Wing-regime spectral batch** — airspeed-binned step response +
-   airspeed×frequency spectrogram (both high-value, reuse existing
-   engines) + low-frequency airframe-mode detection + wavelet / non-
-   stationary spectra (more speculative). From the 2026-05-19
-   PTB-vs-wing discussion.
+9. **Airspeed-binned step response** — the one wing-regime spectral-
+   batch item NOT pulled into the Spectrum roadmap; it lives on the
+   Step tab, not Spectrum, and reuses `computeStepResponse` + the M3
+   airspeed estimate. (Airspeed×frequency spectrogram, low-frequency
+   airframe modes and the wavelet view became S2 above.)
 
 **UX / infrastructure follow-ups** (not analytics — surfaced during
 M-FF, 2026-05-19):
