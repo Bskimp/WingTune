@@ -38,9 +38,10 @@
 Design docs locked through v0.9 (roadmap) / rev 12 (M1 execution).
 M1 functionally complete (corpus track aside). **Wing analytics
 suite (M2 / M3 / M5 / M6 / M7) + M-Servo MVP + M-FF feedforward /
-maneuver-detection + M1.7 multi-log compare + M1.7.1 time-alignment
-UI all shipped.** Analytics-plan milestone M-FF closed 2026-05-19;
-**M-Coupling is the active milestone** (analytics-plan priority #2).
+maneuver-detection + M-Coupling cross-axis matrix + M1.7 multi-log
+compare + M1.7.1 time-alignment UI all shipped.** Analytics-plan
+milestones M-FF + M-Coupling closed 2026-05-19/20; **M-Servo-2 is
+the next milestone** (analytics-plan priority #3).
 Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
@@ -596,6 +597,29 @@ bearing design decisions.
       tuning-workflow guide (5bcd526), per-tab tuning guide
       (cc844e0).
 
+- **M-Coupling cross-axis coupling matrix (2026-05-20, commit
+  e5f9d87).** Analytics-plan priority #2. `lib/coupling.ts` —
+  `analyzeCoupling` builds a 3×3 signed matrix of how hard each
+  control axis disturbs the other two, measured ONLY inside the
+  single-axis snap windows from `maneuverDetect` ('mixed'
+  excluded) so a banked turn's natural pitch trade isn't read as
+  a fault. Per-window ratios are sign-aligned by the commanded
+  rotation direction → systematic coupling reinforces, random
+  wobble averages out. Baseline-subtracted peak deviation +
+  response tail for lagged coupling. `CouplingPanel.vue` — the
+  3×3 grid on the Tracking tab (stacked below
+  SetpointTrackingPanel), traffic-light cells vs
+  `SIGNIFICANT_COUPLING`, under-sampled rows greyed, honest
+  empty states. `lib/recommenders/coupling.ts` — diagnostic-only
+  yellow recs per significant off-diagonal cell on a trusted
+  row, NO CLI (coupling has no firmware fix — mixer / CG /
+  mechanical, corrected off-tool). Three calibration knobs
+  (response tail, significance threshold, min-command-response
+  floor) marked TODO calibrate — conservative wing-regime
+  defaults, fail-safe because diagnostic-only. 249 unit tests
+  (13 new), typecheck clean. Plan:
+  `docs/wingtune-m-coupling-execution.md`.
+
 **In flight / pending:**
 
 - **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
@@ -653,18 +677,17 @@ bearing design decisions.
 
 **Immediate next step when resuming code work:** the analytics
 expansion plan (`docs/wingtune-analytics-plan.md`) drives from
-here. M-FF (priority #1) shipped 2026-05-19 (abff4fa). **M-Coupling
-— the cross-axis coupling matrix (analytics-plan priority #2) — is
-the active milestone.** Decisions locked 2026-05-20: gate the
-coupling measurement on transient windows only (reuse the M-FF
-`maneuverDetect.ts` segment selector); diagnostic-only — yellow
-recs, no CLI (coupling is a mixer / CG / mechanical diagnosis with
-no firmware fix). Execution detail in
-`docs/wingtune-m-coupling-execution.md`. All other near-term work
-is flight-blocked (Step recommender threshold recalibration needs
-a clean F=0+S=0 PD-isolated reference flight; M3/M5/M6/M7 visual
-validation needs throttle-varying cruise) or held on Brian's call
-(upstream `blackbox-log` PR, upstream firmware writer-order PR).
+here. M-FF (priority #1, abff4fa) and M-Coupling (priority #2,
+e5f9d87) are both shipped. **M-Servo-2 — servo hunt + airframe
+transfer function (analytics-plan priority #3) — is the next
+milestone**; no execution doc yet, write one when it's picked up
+per the analytics-plan convention. All other near-term work is
+flight-blocked (M-Coupling's three calibration knobs want a
+single-axis-snap flight; Step recommender threshold recalibration
+needs a clean F=0+S=0 PD-isolated reference flight; M3/M5/M6/M7
+visual validation needs throttle-varying cruise) or held on
+Brian's call (upstream `blackbox-log` PR, upstream firmware
+writer-order PR).
 
 ## Cardinal rules
 

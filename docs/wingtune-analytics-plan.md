@@ -15,15 +15,16 @@ don't re-litigate it later.
 
 ## Priority order
 
-> **Status (2026-05-20):** item 1 (M-FF) shipped — commit `abff4fa`,
-> panel on the Step tab; the display-smoothing slider shipped too
-> (`d28c836`). Item 2 (M-Coupling) is the **active milestone** —
-> execution detail in `docs/wingtune-m-coupling-execution.md`.
+> **Status (2026-05-20):** items 1 (M-FF, `abff4fa`) and 2
+> (M-Coupling, `e5f9d87`) shipped; the display-smoothing slider
+> shipped too (`d28c836`). Item 3 (M-Servo-2) is next — no
+> execution doc yet (written when a milestone is picked up).
 
 1. ~~**M-FF — Feedforward effectiveness + maneuver detection**~~ —
    ✅ **shipped** abff4fa (2026-05-19)
-2. **M-Coupling — Cross-axis coupling matrix** ← **active**
-3. **M-Servo-2 — Servo hunt + airframe transfer function**
+2. ~~**M-Coupling — Cross-axis coupling matrix**~~ —
+   ✅ **shipped** e5f9d87 (2026-05-20)
+3. **M-Servo-2 — Servo hunt + airframe transfer function** ← **next**
 4. **M-Pilot — Pilot-input style analysis**
 5. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
    folds into the existing Airspeed panel)
@@ -121,7 +122,14 @@ whole-flight averaging. Low-effort follow-on once the detector exists.
 
 ---
 
-## M-Coupling — Cross-axis coupling matrix
+## M-Coupling — Cross-axis coupling matrix ✅ SHIPPED
+
+> ✅ Shipped 2026-05-20 (commit `e5f9d87`): `lib/coupling.ts`,
+> `CouplingPanel.vue` on the Tracking tab,
+> `lib/recommenders/coupling.ts` (diagnostic-only). Gated on
+> transient single-axis snap windows. The sketch below is the
+> original design intent; execution detail in
+> `docs/wingtune-m-coupling-execution.md`.
 
 **Why:** "the wing rolls fine but pitches weirdly when I correct" is
 a real mystery-bug class no current panel surfaces. When you command
