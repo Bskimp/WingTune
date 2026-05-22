@@ -15,6 +15,7 @@
 import SetpointTrackingPanel from '@/components/analysis/SetpointTrackingPanel.vue';
 import CouplingPanel from '@/components/analysis/CouplingPanel.vue';
 import PIDContributionPanel from '@/components/analysis/PIDContributionPanel.vue';
+import TrimDiagnosticsPanel from '@/components/analysis/TrimDiagnosticsPanel.vue';
 </script>
 
 <template>
@@ -22,5 +23,6 @@ import PIDContributionPanel from '@/components/analysis/PIDContributionPanel.vue
     <SetpointTrackingPanel />
     <CouplingPanel />
     <PIDContributionPanel />
+    <TrimDiagnosticsPanel />
   </div>
 </template>
