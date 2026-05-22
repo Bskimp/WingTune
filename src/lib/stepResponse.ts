@@ -131,6 +131,11 @@ export interface ComputeStepResponseOptions {
    *  (400 ms — wing-scaled per CLAUDE.md SCOPE box). Tests use shorter
    *  windows for synthetic responses. */
   peakWindowMs?: number;
+  /** Optional [startIdx, endIdx) sample ranges to restrict the
+   *  deconvolution to. A segment never straddles a range boundary, so
+   *  non-contiguous spans (e.g. one airspeed bin's in-range runs)
+   *  introduce no join discontinuity. Omitted / empty → whole signal. */
+  regions?: ReadonlyArray<readonly [number, number]>;
 }
 
 export function computeStepResponse(
@@ -189,8 +194,25 @@ export function computeStepResponse(
   const hRe = new Float32Array(segmentLen);
   const hIm = new Float32Array(segmentLen);
 
+  // Segment start positions — every overlap step within each region.
+  // Segments never straddle a region boundary, so non-contiguous spans
+  // (e.g. one airspeed bin's in-range runs) introduce no join
+  // discontinuity. Omitted / empty `regions` → the whole signal.
+  const regions: ReadonlyArray<readonly [number, number]> =
+    options.regions && options.regions.length > 0
+      ? options.regions
+      : [[0, setpoint.length]];
+  const segmentStarts: number[] = [];
+  for (const region of regions) {
+    const lo = Math.max(0, Math.trunc(region[0]));
+    const hi = Math.min(setpoint.length, Math.trunc(region[1]));
+    for (let start = lo; start + segmentLen <= hi; start += step) {
+      segmentStarts.push(start);
+    }
+  }
+
   let numSegments = 0;
-  for (let start = 0; start + segmentLen <= setpoint.length; start += step) {
+  for (const start of segmentStarts) {
     if (segmentMaxAbs(setpoint, start, segmentLen) < peakThreshold) continue;
 
     for (let i = 0; i < segmentLen; i++) {

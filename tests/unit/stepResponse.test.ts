@@ -130,6 +130,29 @@ describe('computeStepResponse', () => {
     expect(r.latencyMs).toBeLessThan(100);
   });
 
+  test('regions restrict the deconvolution to the given spans', () => {
+    const sr = 1000;
+    const n = 8192;
+    const half = 4096;
+    // First half carries square-wave steps; second half stays flat.
+    const setpoint = new Float32Array(n);
+    for (let i = 0; i < half; i++) {
+      setpoint[i] = Math.floor(i / 200) % 2 === 0 ? 100 : -100;
+    }
+    const gyro = simulateFirstOrder(setpoint, sr, 0.08);
+    const opts = { segmentLen: 1024, windowSec: 0.3, setpointPeakThreshold: 10 };
+
+    const firstHalf = computeStepResponse(setpoint, gyro, sr, {
+      ...opts, regions: [[0, half]],
+    });
+    const secondHalf = computeStepResponse(setpoint, gyro, sr, {
+      ...opts, regions: [[half, n]],
+    });
+
+    expect(firstHalf.numSegments).toBeGreaterThan(0);
+    expect(secondHalf.numSegments).toBe(0); // no steps in the flat span
+  });
+
   test('all-quiet setpoint produces zero segments', () => {
     const sr = 1000;
     const setpoint = new Float32Array(8192); // all zeros
