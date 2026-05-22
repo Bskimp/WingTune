@@ -35,6 +35,7 @@ import TimeBar from '@/components/analysis/TimeBar.vue';
 import CursorReadout from '@/components/analysis/CursorReadout.vue';
 import SmoothingControl from '@/components/SmoothingControl.vue';
 import TuneProfileControl from '@/components/TuneProfileControl.vue';
+import SummaryTab from '@/components/analysis/SummaryTab.vue';
 import TrackingTab from '@/components/analysis/TrackingTab.vue';
 import ServosTab from '@/components/analysis/ServosTab.vue';
 import AirspeedPanel from '@/components/analysis/AirspeedPanel.vue';
@@ -44,7 +45,6 @@ import STermPanel from '@/components/analysis/STermPanel.vue';
 import SpectrumTab from '@/components/analysis/SpectrumTab.vue';
 import StepTab from '@/components/analysis/StepTab.vue';
 import RecommendTab from '@/components/analysis/RecommendTab.vue';
-import CapabilitySummary from '@/components/CapabilitySummary.vue';
 
 const view = useViewStore();
 const { activeTab } = storeToRefs(view);
@@ -113,7 +113,7 @@ watchEffect(() => {
     </div>
 
     <div class="mt-4">
-      <CapabilitySummary v-if="activeTab === 'summary'" />
+      <SummaryTab v-if="activeTab === 'summary'" />
       <TrackingTab v-else-if="activeTab === 'tracking'" />
       <ServosTab v-else-if="activeTab === 'servos'" />
       <AirspeedPanel v-else-if="activeTab === 'airspeed'" />
