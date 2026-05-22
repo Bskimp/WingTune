@@ -16,7 +16,7 @@
 //
 // Single-log (useActiveLog) + per-axis. Diagnostic only — no CLI.
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch, watchEffect } from 'vue';
 import type uPlot from 'uplot';
 import type { AlignedData, Options } from 'uplot';
 
@@ -51,6 +51,10 @@ const axisSpec = computed(() => AXES[selectedAxis.value]);
 
 type Source = 'model' | 'gps';
 const airspeedSource = ref<Source>('model');
+
+/** Bin indices the user has toggled off. Unpopulated bins are hidden
+ *  regardless; this only tracks populated-bin show/hide. */
+const hiddenBins = ref<Set<number>>(new Set());
 
 const logStore = useActiveLog();
 const { scanReport, time, gpsTimeSec, fields, hydrating } = logStore;
@@ -137,22 +141,29 @@ const fitRSquared = computed(() => modelAirspeed.value?.rSquared);
 
 // --- chart -----------------------------------------------------------
 
-/** A bin with no segments contributes a NaN trace (no line) rather
- *  than a flat-zero line that would read as a real response. */
-function nanLike(n: number): Float32Array {
-  return new Float32Array(n).fill(NaN);
-}
-
 const data = computed<AlignedData>(() => {
   const r = result.value;
-  if (!r || !ready.value || r.time.length === 0) {
-    const stub = new Float32Array([0, 0.5]);
-    return [stub, nanLike(2), nanLike(2), nanLike(2)] as unknown as AlignedData;
+  if (!r || !ready.value || r.time.length === 0 || r.bins.length !== BIN_COUNT) {
+    // Stub: x + 3 FINITE y-series so the series count always matches
+    // `opts` (fixed — no rebuilds). The pending overlay covers this.
+    return [
+      new Float32Array([0, 0.5]),
+      new Float32Array([0, 0]),
+      new Float32Array([0, 0]),
+      new Float32Array([0, 0]),
+    ] as unknown as AlignedData;
   }
-  const series = r.bins.map((b) =>
-    b.response.numSegments > 0 ? b.response.response : nanLike(r.time.length),
-  );
-  return [r.time, ...series] as unknown as AlignedData;
+  // Every bin contributes its real response array (all-zeros for an
+  // unpopulated bin). Visibility — hiding unpopulated + toggled-off
+  // bins — is applied via `setSeries`, NOT by feeding uPlot NaN
+  // arrays: an all-NaN series leaves uPlot with no y-scale and blanks
+  // the entire chart in this build.
+  return [
+    r.time,
+    r.bins[0].response.response,
+    r.bins[1].response.response,
+    r.bins[2].response.response,
+  ] as unknown as AlignedData;
 });
 
 /** y = 1.0 ideal-step reference, drawn faint in the `draw` hook. */
@@ -212,8 +223,58 @@ const hostRef = ref<HTMLDivElement | null>(null);
 const plot = useUPlot({ target: hostRef, data, opts });
 
 function resetZoom() { plot.resetZoom(); }
-function selectAxis(id: Axis) { selectedAxis.value = id; }
-function selectSource(s: Source) { airspeedSource.value = s; }
+function selectAxis(id: Axis) {
+  selectedAxis.value = id;
+  hiddenBins.value = new Set();
+}
+function selectSource(s: Source) {
+  airspeedSource.value = s;
+  hiddenBins.value = new Set();
+}
+
+/** Populated bins currently visible — used to keep at least one trace
+ *  on the chart (hiding the last leaves uPlot with no y-scale). */
+function visiblePopulatedCount(): number {
+  const r = result.value;
+  if (!r) return 0;
+  let c = 0;
+  r.bins.forEach((b, i) => {
+    if (b.response.numSegments > 0 && !hiddenBins.value.has(i)) c += 1;
+  });
+  return c;
+}
+
+function toggleBin(i: number): void {
+  const next = new Set(hiddenBins.value);
+  if (next.has(i)) {
+    next.delete(i);
+  } else {
+    if (visiblePopulatedCount() <= 1) return; // keep one trace shown
+    next.add(i);
+  }
+  hiddenBins.value = next;
+}
+
+// Per-bin trace visibility, applied imperatively so `opts` stays fixed
+// (no chart rebuilds). Unpopulated bins are always hidden; populated
+// bins follow `hiddenBins`. watchEffect re-fires on toggle, on result
+// change, and on every setData (plot.updateCount).
+function syncVisibility(): void {
+  const u = plot.instance();
+  const r = result.value;
+  if (!u || !r) return;
+  for (let i = 0; i < r.bins.length; i++) {
+    const populated = r.bins[i].response.numSegments > 0;
+    const show = populated && !hiddenBins.value.has(i);
+    const s = u.series[i + 1];
+    if (s && s.show !== show) u.setSeries(i + 1, { show });
+  }
+}
+watchEffect(() => {
+  if (!plot.ready.value) return;
+  void plot.updateCount.value;
+  syncVisibility();
+});
 
 // --- footer per-bin rows ---------------------------------------------
 
@@ -223,6 +284,7 @@ interface BinRow {
   speedText: string;
   detail: string;
   populated: boolean;
+  hidden: boolean;
 }
 const binRows = computed<BinRow[]>(() => {
   const r = result.value;
@@ -230,7 +292,10 @@ const binRows = computed<BinRow[]>(() => {
   return r.bins.map((b, i) => {
     const speedText = `${b.midSpeed.toFixed(0)} m/s`;
     if (b.response.numSegments === 0) {
-      return { key: i, color: BIN_COLORS[i], speedText, detail: 'no step inputs flown', populated: false };
+      return {
+        key: i, color: BIN_COLORS[i], speedText,
+        detail: 'no step inputs flown', populated: false, hidden: false,
+      };
     }
     const peak = b.response.peakAmplitude.toFixed(2);
     const lat = Number.isFinite(b.response.latencyMs)
@@ -242,6 +307,7 @@ const binRows = computed<BinRow[]>(() => {
       speedText,
       detail: `peak ${peak} · lat ${lat} · ${b.response.numSegments} seg`,
       populated: true,
+      hidden: hiddenBins.value.has(i),
     };
   });
 });
@@ -337,17 +403,32 @@ const pendingMessage = computed(() => {
 
     <footer class="flex flex-wrap justify-between items-start px-3 py-2 border-t border-bp-line text-[10.5px] gap-y-1.5 gap-x-3">
       <div class="flex flex-wrap gap-1.5 items-center">
-        <span
+        <button
           v-for="row in binRows"
           :key="row.key"
-          class="flex items-center gap-1.5 px-1.5 py-[2px] border font-mono"
-          :class="row.populated ? 'border-solid' : 'border-dashed opacity-55'"
+          type="button"
+          :disabled="!row.populated"
+          class="flex items-center gap-1.5 px-1.5 py-[2px] border font-mono bg-transparent"
+          :class="[
+            row.populated
+              ? 'border-solid cursor-pointer'
+              : 'border-dashed opacity-55 cursor-default',
+            row.populated && row.hidden ? 'opacity-40' : '',
+          ]"
           :style="{ borderColor: row.color }"
+          :aria-pressed="row.populated && !row.hidden"
+          :title="!row.populated
+            ? 'No step inputs were flown at this airspeed bin'
+            : row.hidden ? 'Click to show this bin' : 'Click to hide this bin'"
+          @click="row.populated && toggleBin(row.key)"
         >
           <span class="w-3 h-px inline-block" :style="{ backgroundColor: row.color }" />
-          <span class="text-bp-ink-2">{{ row.speedText }}</span>
+          <span
+            class="text-bp-ink-2"
+            :class="{ 'line-through': row.populated && row.hidden }"
+          >{{ row.speedText }}</span>
           <span class="text-bp-ink-3">{{ row.detail }}</span>
-        </span>
+        </button>
       </div>
       <div
         v-if="ready && airspeedSource === 'model' && fitRSquared !== undefined"
@@ -366,8 +447,9 @@ const pendingMessage = computed(() => {
       segments flown inside that airspeed bin. Curves diverging — slow
       sluggish, fast ringy — means the airframe needs airspeed-scheduled
       gains (the M5 TPA curve); curves overlapping means one gain set
-      covers the range. The dashed line is the ideal unit step.
-      Diagnostic only — no CLI.
+      covers the range. The dashed line is the ideal unit step. Click a
+      speed chip above to show / hide that bin's trace. Diagnostic only
+      — no CLI.
     </div>
   </section>
 </template>
