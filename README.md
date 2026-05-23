@@ -2,7 +2,7 @@
 
 A desktop-first (Tauri 2.x) log analysis tool for the fixed-wing side of Betaflight, with a no-install browser demo from the same source.
 
-**Status:** M1 functionally complete + the full wing analytics suite shipped (M2 PIDFS decomp / M3 BASIC airspeed fit / M4 spectrum + filter delay / M5 HYPERBOLIC TPA curve fit / M6 SPA effectiveness / M7 S-term TPA viz). M-Servo MVP + M1.7 multi-log compare + M1.7.1/.2 time-alignment & signal-registry work all landed, followed by the post-M7 analytics batch — M-FF feedforward, M-Coupling cross-axis matrix, M-FilterSim per-stage filter sim, S2 airspeed-resolved spectra, M-Style tune-style profiles, and M-Servo-2 servo hunt + airframe transfer function. Mostly threshold calibration (waiting on purpose-built calibration flights) + Brian-blocked (upstream PRs) from here. See [CLAUDE.md](CLAUDE.md) for the authoritative status snapshot.
+**Status:** M1 functionally complete + the full wing analytics suite shipped (M2 PIDFS decomp / M3 BASIC airspeed fit / M4 spectrum + filter delay / M5 HYPERBOLIC TPA curve fit / M6 SPA effectiveness / M7 S-term TPA viz). M-Servo MVP + M1.7 multi-log compare + M1.7.1/.2 time-alignment & signal-registry work all landed, followed by the post-M7 analytics batch — M-FF feedforward, M-Coupling cross-axis matrix, M-FilterSim per-stage filter sim, S2 airspeed-resolved spectra, M-Style tune-style profiles, M-Servo-2 servo hunt + airframe transfer function, and M-Pilot input-style classification (which also closes the deferred M-Style auto-suggest hook). Every buildable-now analytics-plan milestone has shipped — what remains is threshold calibration (waiting on purpose-built calibration flights) + Brian-blocked (upstream PRs). See [CLAUDE.md](CLAUDE.md) for the authoritative status snapshot.
 
 ## Why this exists
 
@@ -48,15 +48,16 @@ WingTune is a from-scratch analytics and visualization layer for that regime. Re
 - **S2 airspeed-resolved spectra** — gyro STFT binned by airspeed (an airspeed×frequency heatmap) + sub-3 Hz airframe-mode detection (phugoid / dutch-roll / short-period).
 - **M-Style tune-style profiles** — a global Cruise / Sport / 3D dial that reweights recommender + panel thresholds; Sport equals today's constants, so the default profile is a behavioural no-op.
 - **M-Servo-2 servo hunt + airframe transfer function** — Welch cross-spectral `H(f)` + coherence → an airframe-bandwidth Bode panel, plus a per-servo hunt score for uncommanded high-frequency PWM motion. Diagnostic-only.
+- **M-Pilot input-style classification** — reads `rcCommand[0..2]` and characterises HOW the log was flown (calm pilot / aggressive pilot / pilot fighting an unstable wing) from per-axis activity, reversal rate, and stroke amplitudes. Drives a non-binding profile suggestion on the tune-style dial (closes M-Style's deferred auto-suggest slice). Diagnostic-only.
 - **Regression corpus** — the 4 limonspb PR #13895 reference logs plus Brian's 3 real-flight USE_WING logs (7 total) in `tests/corpus-private/`, all validating cleanly via `npm run corpus:validate:private`.
 - **`blackbox-log:wing-support` fork** — adds BF 2026.6 + BF 4.6 YAML coverage, the eight wing debug modes (TPA / S_TERM / SPA / WING_SETPOINT / WING_LAUNCH / GPS_RESCUE_WING / SERVO_AUTOTRIM / AUTOLAND), and the regenerated source. Upstream PR not yet opened — held on Brian's call.
 
 **Held / pending:**
 
-- Threshold calibration across the suite — M-Coupling, M-FilterSim, S2, M-Style, the Step recommender, and M-Servo-2 all carry first-guess `TODO calibrate` constants that become real numbers once the purpose-built sorties in [docs/wingtune-calibration-flights.md](docs/wingtune-calibration-flights.md) are flown
+- Threshold calibration across the suite — M-Coupling, M-FilterSim, S2, M-Style, M-Pilot, the Step recommender, and M-Servo-2 all carry first-guess `TODO calibrate` constants that become real numbers once the purpose-built sorties in [docs/wingtune-calibration-flights.md](docs/wingtune-calibration-flights.md) are flown
 - M3 / M5 / M6 / M7 visual validation — wants throttle-varying cruise + GPS lock
 - Upstream `blackbox-log` + firmware writer-order PRs — held on Brian's call
-- Next milestone: M-Pilot (input-style classification)
+- Craft persistence — research-deferred; needs a scope pass before any code lands
 
 See [CLAUDE.md](CLAUDE.md) for the per-slice authoritative status with file paths + commit hashes.
 

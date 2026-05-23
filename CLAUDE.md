@@ -43,9 +43,12 @@ compare + M1.7.1 time-alignment UI all shipped.** Analytics-plan
 milestones M-FF + M-Coupling + M-FilterSim (S1) +
 Spectrum-roadmap S2 (airspeed-resolved spectra) + M-Style
 (Cruise/Sport/3D tune-style dial) + M-Servo-2 (servo hunt +
-airframe transfer function) closed 2026-05-19/21.
-**M-Pilot (input-style classification) is the next milestone** —
-see `docs/wingtune-analytics-plan.md`.
+airframe transfer function) + M-Pilot (input-style classification,
+which also closes the deferred M-Style Slice 4 auto-suggest)
+closed 2026-05-19/22. With M-Pilot done, every buildable-now
+analytics-plan milestone has shipped — remaining priorities are
+threshold calibration (gated on Brian's purpose-built calibration
+sorties) or research-deferred (craft persistence).
 Other near-term work is **polish + Brian-blocked** (visual-validation
 calibration flights for M3/M5/M6/M7, upstream `blackbox-log` PR,
 step-response amplitude calibration vs PIDscope). M1.7 landed
@@ -739,6 +742,49 @@ bearing design decisions.
   transferFunction, 11 servoHunt). Plan:
   `docs/wingtune-m-servo-2-execution.md`.
 
+- **M-Pilot — input-style classification + M-Style Slice 4
+  auto-suggest (2026-05-22, commit `39a1e91`).** Analytics-plan
+  priority #7. Three slices, all diagnostic-only (no recommender,
+  no CLI — the verdict drives a non-binding UI hint, never an
+  auto-apply):
+    · **Slice 1** — `lib/pilotStyle.ts`: per-axis (roll/pitch/yaw
+      from `rcCommand[0..2]`) `activityRms`, `reversalRatePerSec`,
+      `strokeMedian`/`strokeP90`. Hysteresis zigzag with running
+      max/min priming — direction commits only when extremum span
+      > `reversalDeadband` (default 25 = 5% of BF ±500 full-scale),
+      every confirmed turning point = one reversal. Aggregate verdict
+      from roll+pitch (yaw excluded — rudder use is wing-specific,
+      not a style signal): `suggestedProfile` (cruise / sport / 3d
+      from p90 amplitude) + `correctionCharacter` (calm / active /
+      busy from reversal rate). Activity-floor fallback so a calm
+      flight with sub-deadband jitter resolves to Cruise instead of
+      falling out of the verdict.
+    · **Slice 2** — `PilotStylePanel.vue` on the Summary tab (new
+      `SummaryTab.vue` wrapper stacks it under `CapabilitySummary`):
+      per-axis activity bar + reversal rate + stroke p50/p90, headline
+      composes character+profile into one English sentence, honest
+      empty state when log < 3 s or sticks barely moved.
+    · **Slice 3** — M-Style Slice 4 auto-suggest hook on
+      `TuneProfileControl.vue`: non-binding hint with [switch] /
+      [dismiss] when pilot style ≠ active profile. Dismissals keyed
+      by (logId × current profile × suggestion); reset on manual
+      profile flip or active-log change. The honesty rule from
+      M-Style applies — the profile is the user's declared intent;
+      M-Pilot may suggest, never auto-apply.
+  Amplitude→profile + rate→character bands are wing-regime first
+  guesses (TODO calibrate against corpus logs flown in each style;
+  same gate as M-Style's per-profile thresholds — both unblock on
+  the same calibration weekend). Read first: the SCOPE box's
+  cardinal "use absolute units, never normalise by per-log max" —
+  "this pilot only ever used 60% stick" IS the style. Test corpus
+  caveat: a [-amp, amp] *random* noise stream of amp > deadband/2
+  CAN leap past deadband in a single sample and confirm a reversal;
+  the "calm" test fixture uses a smooth low-frequency sine (span <
+  deadband by construction) instead — see
+  `tests/unit/pilotStyle.test.ts`. 397/397 unit tests (+10).
+  Typecheck clean. Corpus 7/7 PASS. Plan:
+  `docs/wingtune-m-pilot-execution.md`.
+
 **In flight / pending:**
 
 - **M3 + M5 visual validation: PARTIALLY UNBLOCKED 2026-05-18.**
@@ -794,22 +840,28 @@ bearing design decisions.
   KNOWN_PRESETS come via copy-paste from the CLI, not a serial
   link from WingTune.
 
-**Immediate next step when resuming code work:** M-Servo-2 (servo
-hunt + airframe transfer function) shipped 2026-05-21 — all four
-slices done. **M-Pilot (input-style classification) is the next
-milestone** — it also unblocks the deferred M-Style Slice 4
-(profile auto-suggest); see `docs/wingtune-analytics-plan.md`. No
-execution doc yet — write one when M-Pilot is picked up. All other
-near-term work is flight-blocked (M-Servo-2's hunt-band edge +
-score + bandwidth thresholds want corpus calibration; M-Coupling's
-three calibration knobs want a single-axis-snap flight;
-M-FilterSim's simFidelity-threshold and S2's peak-detection /
-smoothing knobs want more corpus logs; M-Style's per-profile
-Cruise / 3D thresholds want corpus logs flown in each style; Step
-recommender threshold recalibration needs a clean F=0+S=0
-PD-isolated reference flight; M3/M5/M6/M7 visual validation needs
-throttle-varying cruise) or held on Brian's call (upstream
-`blackbox-log` PR, upstream firmware writer-order PR).
+**Immediate next step when resuming code work:** M-Pilot
+(input-style classification) shipped 2026-05-22 — three slices
+done, closes M-Style Slice 4 along the way. **Every buildable-now
+analytics-plan milestone has shipped.** The honest next step is
+Brian's calibration-flight weekend, then a calibration pass that
+converts the suite's `TODO calibrate` first-guess constants into
+measured numbers — see `docs/wingtune-calibration-flights.md` for
+which knobs each sortie unlocks. Concretely calibration-blocked:
+M-Pilot's amplitude→profile + rate→character bands; M-Style's
+per-profile Cruise / 3D thresholds (filter-delay budget, coupling
+significance, step-peak bands); M-Servo-2's hunt-band edge + score
++ bandwidth thresholds; M-Coupling's three knobs (response tail,
+significance, min-command-response); M-FilterSim's simFidelity
+gate; S2's peak-detection + smoothing knobs; the Step recommender
+(needs a clean F=0+S=0 PD-isolated reference flight). Also
+calibration-blocked: M3 / M5 / M6 / M7 visual validation (needs
+throttle-varying cruise). Held on Brian's call: upstream
+`blackbox-log` PR, upstream firmware writer-order PR. Research-
+deferred (do NOT start without planning pass): craft persistence —
+needs scope work before touching code. If a pure-polish task
+arises before calibration data lands, fine; otherwise the next
+substantial code work is the post-calibration threshold pass.
 
 ## Cardinal rules
 
