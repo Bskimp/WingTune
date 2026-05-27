@@ -92,50 +92,69 @@ function hydrate(fields: string[]) {
 }
 ```
 
-## Invariant 3: Workspaces declare fields
+## Invariant 3: Panels declare fields, AnalysisView eager-pins the recommender set
 
-A workspace (PIDFS view, servo view, gyro+setpoint view, etc.) is the unit of
-"what the user is currently looking at." Each workspace **declares its field
-list** as part of its definition. The log store hydrates exactly that list
-when the workspace activates.
+The original M1 design had a `workspace.ts` store with named workspaces;
+that concept got rolled into a simpler two-level pattern during M1.3 +
+M1.7:
+
+1. **Per-panel `onMounted` declaration.** Every analysis panel calls
+   `logStore.ensureFields([...])` in `onMounted` for the fields it needs
+   to render. Hydration is async; the panel renders a pending state
+   (`hydrating.value.has(field)`) until the typed arrays arrive.
+2. **Recommender-required fields pinned at log load.**
+   `src/views/AnalysisView.vue` runs a `watchEffect` over
+   `session.logs`; for every freshly-scanned log, it pins the
+   `ALL_RECOMMENDER_REQUIRED_FIELDS` set on that log's id, then calls
+   `ensureFields(...)` once. The recommender pipeline can fire as soon
+   as scan completes, without waiting on any particular panel to mount.
 
 ```ts
-// src/stores/workspace.ts
-const workspaces: Record<string, Workspace> = {
-  gyroSetpoint: {
-    label: 'Gyro + setpoint',
-    requiredFields: [
-      'gyroADC[0]', 'gyroADC[1]', 'gyroADC[2]',
-      'setpoint[0]', 'setpoint[1]', 'setpoint[2]',
-    ],
-  },
-  pidfsTerms: {
-    label: 'PIDFS term decomposition',
-    requiredFields: [
-      'axisP[0]', 'axisI[0]', 'axisD[0]', 'axisF[0]', 'axisS[0]',
-      'axisP[1]', 'axisI[1]', 'axisD[1]', 'axisF[1]', 'axisS[1]',
-      'axisP[2]', 'axisI[2]', 'axisD[2]', 'axisF[2]', 'axisS[2]',
-    ],
-  },
-  // …
-};
+// In every analysis panel
+const REQUIRED_FIELDS = ['rcCommand[0]', 'rcCommand[1]', 'rcCommand[2]'];
+
+onMounted(() => { logStore.ensureFields(REQUIRED_FIELDS); });
 ```
 
-When the user switches workspaces, the log store:
-1. Computes the set difference — fields needed but not yet hydrated
-2. Hydrates only those (visible spinner during this)
-3. Optionally evicts fields no longer needed if total hydrated size is over cap
+```ts
+// src/views/AnalysisView.vue — eager hydrate for the recommender set
+watchEffect(() => {
+  for (const log of session.logs.values()) {
+    const report = log.scanReport;
+    if (!report || eagerlyHydrated.has(log.id)) continue;
+    eagerlyHydrated.add(log.id);
+    const present = new Set(report.capability.fields_present);
+    const wanted = ALL_RECOMMENDER_REQUIRED_FIELDS.filter((f) => present.has(f));
+    session.pinFields(log.id, wanted);   // PIN BEFORE HYDRATE — see below
+    session.ensureFields(log.id, wanted).catch(() => { /* tolerated */ });
+  }
+});
+```
 
-Analysis modules in Layer 2 follow the same contract: each module exports its
-`requiredFields` list, the runner hydrates those before invoking the analysis.
+Convenience expansion ("while we're at it, decode the sibling axes too")
+is still forbidden — declared fields are declared, period. The two-level
+shape (per-panel + recommender eager-pin) is the *only* extension of the
+lazy-hydration cardinal rule.
 
-## Reactivity: shallowRef for typed arrays
+### `pinFields` MUST run before `ensureFields` for the eager set
 
-Vue 3's default `ref` deeply proxies the contained value. For a 50 MB
-`Float32Array`, this is catastrophic — Vue will try to wrap every element in a
-Proxy. The tab will hang and may crash.
+The session store's LRU sweep at end-of-`ensureFields` evicts in
+insertion order until under the cache cap. If `pinFields(id, set)` runs
+*after* `ensureFields(id, set)`, the freshly-hydrated arrays are
+evictable during their own first sweep — a thrash window the recommender
+pipeline can hit. Pin first, hydrate second. There is one canonical
+caller of this pair (AnalysisView's eager loop above); future eager
+loaders MUST follow the same order.
 
-Always use `shallowRef` for stores holding typed-array log data:
+## Reactivity: `shallowRef` for typed arrays, `shallowReactive` for the per-log state object
+
+Vue 3's default `ref` and `reactive` deeply proxy their contents. For a
+50 MB `Float32Array` this is catastrophic — Vue will try to wrap every
+element in a Proxy. The tab will hang and may crash.
+
+Two patterns, each load-bearing for a different shape:
+
+### `shallowRef` for individual typed-array values
 
 ```ts
 // ✓ good
@@ -143,45 +162,135 @@ import { shallowRef } from 'vue';
 const gyroX = shallowRef<Float32Array | null>(null);
 gyroX.value = new Float32Array(frameCount); // single reactive write
 
-// ✗ catastrophic — Vue will try to deeply proxy a 50 MB array
+// ✗ catastrophic — Vue tries to deeply proxy a 50 MB array
 import { ref } from 'vue';
 const gyroX = ref<Float32Array | null>(null);
 gyroX.value = new Float32Array(frameCount);
 ```
 
-Same applies to the time axis, hydrated field maps, byte buffers, and any
-non-trivial structure held in store state. When in doubt, prefer `shallowRef`
-and reassign the whole value rather than mutating in place — uPlot redraws on
-reassignment cleanly.
+### `shallowReactive` for the per-log container object
+
+The session store holds one `LogState` per loaded log — an object whose
+fields are a mix of small primitives (id, name, scanProgress,
+timeOffsetSec) and typed-array maps (`fields: Map<string, Float32Array>`).
+The container itself must be `shallowReactive`, NOT `reactive`:
+
+```ts
+// ✓ good
+import { shallowReactive } from 'vue';
+const log = shallowReactive<LogState>({
+  id, name, scanReport: null, time: new Float32Array(0),
+  fields: new Map(), hydrating: new Set(),
+  timeOffsetSec: 0, /* … */
+});
+// Post-construction writes fire reactivity:
+log.scanReport = report;
+log.timeOffsetSec = -0.42;
+```
+
+This was a load-bearing latent bug found during M1.7: with `reactive(...)`,
+post-construction property writes (`log.scanReport = ...`) didn't fire
+reactivity for nested consumers because the proxy was only set up for
+properties present at construction time. `shallowReactive` proxies the
+container shallowly — every property write fires, the deep typed-array
+values stay un-proxied. See `project-m17-multi-log-architecture` memory.
+
+Same applies to anything else with the "container of typed arrays +
+status flags" shape — when in doubt, `shallowReactive`.
 
 See `wingtune-vue-conventions` for the broader store-layout patterns.
 
+## Multi-tenant worker: one byte cache per log id
+
+The parser worker is multi-tenant — it holds one
+`Map<logId, Uint8Array>` keyed by the session store's per-log id, and
+every scan/hydrate/closeLog message carries the id. The session store
+calls `closeLog(id)` when a log is removed from the session so the
+worker drops its byte buffer; otherwise removed logs would pin their
+bytes in worker memory indefinitely.
+
+Two rules fall out:
+
+1. **`logId` is the worker's only addressing.** Any new worker message
+   that touches per-log data carries the id. Worker-level shared state
+   (filter configs, registry resolutions) is per-id, not global.
+2. **`closeLog(id)` is the only cleanup path.** Don't add a "clear all"
+   or "reset" message — log lifecycles are independent, the session
+   store owns the removal decisions, and a global reset on a multi-log
+   session is never the right move.
+
+There is one canonical multi-tenant site (the parser worker) — this is
+not an n-of-many pattern, it's a single-location convention. Future
+multi-tenant work (e.g. an analysis worker pool, when it lands) must
+follow the same `Map<logId, …>` shape unless there's a documented reason
+not to.
+
+## Float32 cardinal-rule named exception: aligned time arrays
+
+The cardinal rule is "no `Float64Array` on the hot path." There is one
+documented escape: `src/lib/sessionTime.ts`'s `alignedTimeFor()` returns
+`Float64Array`. The exception exists because:
+
+```
+sessionTime = logTime (Float32) + timeOffsetSec (number)
+```
+
+Round-tripping that addition through `Float32Array` makes
+`localT = ref[0] - offset` land at e.g. `−2.4e-8` instead of exactly 0
+when `offset === −0.60s`. That falls below the log-local axis's `t0 = 0`,
+which drops sample 0, which cascades into a blank uPlot chart with no
+y-axis labels (uPlot's autorange chokes when sample 0 disappears).
+
+Mitigation: aligned-time arrays are computed in `Float64Array` and
+consumed by panels that build per-log aligned x-axes; everything else
+(the underlying field data, the per-log raw time axis) stays Float32.
+
+**The exception is named in code** at `src/lib/sessionTime.ts` and pinned
+to the alignment path only — DON'T propagate `Float64Array` into anything
+else. Any new code that needs the cardinal-rule escape requires a
+`// MEMORY-EXCEPTION:` comment with similar rationale, and an update to
+this skill in the same commit.
+
+## Rust→JS serialization boundary: `serialize_maps_as_objects(true)`
+
+When the parser returns a Rust map (e.g. `header_params: BTreeMap<String, String>`)
+to JS via serde-wasm-bindgen, the default serialization emits a JS `Map`
+(not a plain object). That breaks `obj[key]` access and
+`Object.entries(obj)` — both silently iterate empty or return undefined.
+
+`crates/wingtune-parser/src/lib.rs` uses a `js_serializer()` helper that
+forces `.serialize_maps_as_objects(true)` for both scan + hydrate
+outputs. Any new return shape that contains a map must go through the
+same helper, not a bare `serde_wasm_bindgen::to_value`.
+
+The failure mode here is silent — there's no type error, just empty data
+on the JS side. Caught a real latent bug at M1.5 (HeaderParamsPanel
+appeared to load empty); the helper is the canonical fix.
+
 ## Cache cap (soft)
 
-Hydrated fields live in a Map keyed by field name. Total bytes across the Map
-has a soft cap, defaulting to **256 MB**, exposed as a setting in
-`src/stores/view.ts`. When a workspace activates and total hydrated size would
-exceed the cap:
+Hydrated fields live per-log in `LogState.fields: Map<string, Float32Array>`.
+The session store enforces a soft cap (`DEFAULT_FIELD_CACHE_BYTES`,
+currently 256 MB) via an LRU sweep at end-of-`ensureFields()`:
 
-1. Identify fields not required by any currently-active workspace (in multi-log
-   sessions this means "any loaded log's active workspace")
-2. Evict them in LRU order until under the cap
-3. If still over cap after evicting all evictable fields, warn the user but
-   proceed — the active workspace's declared fields are sacred and never
-   evicted
+1. Sum byte length across every `LogState.fields` map for every loaded log.
+2. If over cap, evict in Map insertion order (oldest first) **except** any
+   field that's in the per-log pinned set.
+3. If still over cap after evicting everything evictable, stop — the
+   pinned set is sacred. Pinned fields are typically the
+   `ALL_RECOMMENDER_REQUIRED_FIELDS` set installed by `AnalysisView`.
 
-Eviction is a hint, not a correctness mechanism. A re-activated workspace just
-re-hydrates from the parser using the frame index — no data loss, only a
-spinner.
+Eviction is a hint, not a correctness mechanism. A re-mounted panel
+calls `ensureFields(...)` again and re-hydrates from the parser using
+the byte cache in the worker — no data loss, only a brief pending
+state.
 
-> Note: cache eviction is an M1.3 deliverable. Early prototypes can defer the
-> eviction policy and rely on the cap as a warning only. Don't ship the M1
-> exit criteria without the eviction path working, though — large logs need
-> it.
+The pin-before-hydrate ordering (above) is what prevents the LRU sweep
+from evicting freshly-hydrated fields during their own first sweep.
 
 ## What Claude Code might want to do but should not
 
-- **"While we're decoding `axisP[0]`, may as well decode `axisP[1]` and `axisP[2]` too."** No. Hydrate exactly what's declared. Multi-axis grouping decisions belong in the workspace's `requiredFields` list, not in the hydration path.
+- **"While we're decoding `axisP[0]`, may as well decode `axisP[1]` and `axisP[2]` too."** No. Hydrate exactly what's declared. Multi-axis grouping decisions belong in the panel's `REQUIRED_FIELDS` list (or `ALL_RECOMMENDER_REQUIRED_FIELDS` for the eager-hydrate set), not in the hydration path.
 - **"Convert this `Number[]` to `Float32Array` at the end."** No. Allocate the `Float32Array` up front, write into it during decode. The intermediate `Number[]` is itself the memory blowup we're avoiding.
 - **"Cache all hydrated fields forever to avoid re-decoding."** No. The cap exists for a reason; eviction is cheap (re-decode from frame index), exhaustion is not.
 - **"Use absolute Unix timestamps for the time axis."** No. Seconds-since-log-start as `Float32Array`. Absolute timestamps lose sub-millisecond precision in Float32 within an hour of uptime.
@@ -190,12 +299,26 @@ spinner.
 
 ## Quick self-check before committing
 
-- [ ] Any `new Float64Array(` or bare `new Array(` for a field-shaped allocation? Replace with `Float32Array`.
-- [ ] Any field decode happening at end-of-scan rather than on workspace demand? Move to lazy hydration.
-- [ ] Any workspace or analysis module that doesn't declare its `requiredFields`? Add the declaration.
+- [ ] Any `new Float64Array(` or bare `new Array(` for a field-shaped
+      allocation outside the named `sessionTime.ts` exception? Replace
+      with `Float32Array`.
+- [ ] Any field decode happening at end-of-scan rather than via
+      `ensureFields(...)` on demand? Move to lazy hydration.
+- [ ] Any new panel that doesn't declare its required fields via
+      `ensureFields(...)` in `onMounted`? Add it.
+- [ ] Any new eager-hydrate loader that calls `ensureFields(...)` before
+      `pinFields(...)` for the same set? Swap the order — pin first.
 - [ ] Any `ref(typedArray)` in a store or component? Change to `shallowRef`.
-- [ ] Any new field cache outside the central store? Either fold it in or document why it can't be.
-- [ ] Time axis stored as anything other than `Float32Array` of seconds-since-start? Change it.
+- [ ] Any new `LogState`-shaped object (container of typed-array fields
+      + status flags) using `reactive(...)` instead of `shallowReactive(...)`?
+- [ ] Any new worker message that touches per-log data without carrying
+      a `logId`? Add it.
+- [ ] Any new Rust→JS return type containing a map that bypasses the
+      `js_serializer()` helper? Route it through.
+- [ ] Any new field cache outside the session store? Either fold it in
+      or document why it can't be.
+- [ ] Time axis stored as anything other than `Float32Array` of
+      seconds-since-start? Change it.
 
 If any answer is "yes" without a `// MEMORY-EXCEPTION:` comment explaining why,
 the memory model is leaking — fix it before merging. The M1 large-log exit
