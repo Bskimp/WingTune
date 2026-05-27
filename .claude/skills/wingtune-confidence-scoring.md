@@ -147,6 +147,29 @@ The distinction between `inactive` and `partial` is load-bearing for the user:
 advice from "the S field isn't logged in this firmware version" (partial).
 Don't collapse them.
 
+### Fifth registry-level state: `out_of_range`
+
+Signal sources in `signalRegistry.ts` may declare an `expected_range`.
+At resolve time, the registry checks the parser's per-field
+`value_min`/`value_max` from `SampleCheck` against that range; values
+outside the range produce a fifth registry-level state:
+
+- **`out_of_range`** — field is present and non-zero, but the sampled
+  values fall outside the declared `expected_range` for this source.
+  Catches firmware-version mismatches (a channel layout shifted upstream),
+  unit-scale bugs (the BF wing TPA `×1000` regression caught at M1.7.2),
+  or a mis-mapped signal-def entry.
+
+Predicates that consume the registry collapse `out_of_range` to a
+`blocked` capability with a firmware-version reason; the readiness card
+surfaces the observed-vs-expected pair so the user can tell a true
+firmware mismatch from a config bug.
+
+The walker promotes the most-informative state when sources conflict:
+`out_of_range > inactive > missing`. Don't collapse this either —
+"resolved but suspiciously valued" is a different conversation with
+the user than "not logged at all."
+
 ### Three-state field handling (single-source signals only)
 
 For signals with a **single source** (e.g. main-frame `axisS[0..2]`, where
@@ -287,9 +310,78 @@ setpoint-rate range exercised.
 
 ### Modules that don't emit recommendations
 
-M2 (PIDFS decomp) and M7 (S-term TPA viz) are visual-only — they don't emit
-CLI commands and don't need confidence scoring. They still need capability
-predicates so the readiness report can place them.
+Most M-series analytics ship "panel only" — they render information,
+don't tell the user what to do. They still need capability predicates so
+the readiness report can place them; they don't need confidence scoring
+in the sense of `green/yellow/red` because there's no CLI to gate.
+
+### Recommenders that exist but never emit CLI: `cli: []` is the signal
+
+A subset of `src/lib/recommenders/*.ts` exist NOT to emit paste-ready
+CLI, but to surface their analysis through the same Recommend tab as the
+CLI emitters — with diagnostic text + `criteria_met`/`criteria_failed`
+rows, but `cli: []`. Current diagnostic-only recommenders (7 today):
+
+```
+pidfsShares, coupling, ffEffectiveness, inputChain,
+servoAsymmetry, spa, spectrumFilter
+```
+
+vs. real CLI emitters (3 today):
+
+```
+debugMode, airspeedBasic, tpaCurve
+```
+
+`cli: []` is the **canonical diagnostic-only signal**. `RecommendCard.vue`
+gates the copy block on `rec.cli.length > 0` (combined with the red-removes
+rule from `wingtune-recommender` I1); an empty array IS the "render the
+analysis, no copy button" UI state. Don't introduce a separate flag or
+shape for diagnostic-only — emit `cli: []` and trust the gate.
+
+When to make a recommender diagnostic-only:
+
+- The diagnosis has **no firmware fix** (coupling is mixer/CG/mechanical;
+  asymmetric servos are bench-side; trim error is structural). No
+  `set foo = X` would help, so emit none.
+- The fix is a **judgment call** that the panel + criteria let the user
+  reason through, but the tool shouldn't auto-prescribe (filter-delay
+  reduction — *which stage* to trim is a judgment).
+- The thresholds are **first-guess, calibration-pending** (see below) —
+  a CLI emission would over-promise on what's actually a hedged read.
+  Once calibrated, the recommender can graduate to CLI emission.
+
+The `cli: []` convention means a recommender can be promoted to CLI
+emission later (add the `set ...` strings, downgrade confidence rules
+to `red` removes copy) without a new shape or a UI rewrite.
+
+## Calibration debt as an honest confidence signal
+
+A real chunk of the suite carries `TODO calibrate` first-guess constants
+(9 lib files at last audit: coupling, pilotStyle, servoHunt,
+transferFunction, lowFreqModes, maneuverDetect, trimDiagnostics,
+airspeedSpectrogram, tuneProfile). These constants drive panel coloring
++ recommender severity but haven't been validated against corpus logs
+flown with the relevant input.
+
+This is **not a code smell** — it's an honest hedge backed by a real
+mitigation plan (`docs/wingtune-calibration-flights.md` lists the
+purpose-built sorties that turn each guess into a measured number).
+The pairing is what makes it honest:
+
+- The constant lives next to its `TODO calibrate` marker in code.
+- The recommender / panel emits with the constant in effect.
+- Diagnostic-only emission (`cli: []`) keeps the blast radius bounded
+  to "panel coloring + trust erosion if wrong," not "bad CLI to a
+  flight controller."
+- The calibration-flights doc names the sortie that unblocks the
+  constant; once flown, the threshold pass replaces the guess.
+
+The rule: every `TODO calibrate` constant should have a corresponding
+row in `wingtune-calibration-flights.md`. If a new threshold can't
+point at a calibration plan, either find one or hold the threshold at
+diagnostic-only severity. Don't ship calibration-pending thresholds in
+a CLI-emitting recommender without the diagnostic-only gate.
 
 ### Aggregation rule
 
@@ -381,26 +473,37 @@ shows capability; the per-module output panel shows confidence.
 - [ ] For wing-tuning signals (anything with a main-frame and debug-mode
       source), does the predicate route through `resolveSignal()` rather
       than naming a `debug_mode` string or main-frame field directly?
+- [ ] For new signal sources with bounded values: is `expected_range`
+      declared so the registry can promote `out_of_range` for misconfigured
+      logs?
 - [ ] For multi-source signals: does the returned `Capability` carry a `via`
       field reflecting which source resolved (`main_frame`, `debug`, or
       `mixed` when sub-signals resolved differently)?
-- [ ] Does every module that emits CLI return `ConfidenceResult<T>` with the
-      snake_case fields?
+- [ ] Does every recommender that emits CLI return `ConfidenceResult<T>`
+      with the snake_case fields?
+- [ ] For a new diagnostic-only recommender: does it emit `cli: []`
+      (the canonical signal) rather than introducing a separate flag?
 - [ ] Are all single-source field checks using the three-state presence
       helper, not a boolean?
 - [ ] Are critical-vs-supporting criteria documented for every confidence
       criterion in the module?
 - [ ] Does the readiness report render the four capability states with the
-      correct icons (✓ ⚠ ⚠ ✗) and the right color for each, with the
-      informational `(via …)` suffix?
+      correct icons (✓ ⚠ ⚠ ✗), with the informational `(via …)` suffix,
+      and surface the registry's `out_of_range` observed-vs-expected pair?
 - [ ] On `red` confidence, is the copy-CLI affordance removed (not just
       disabled)?
+- [ ] Does every new `TODO calibrate` constant point at a row in
+      `docs/wingtune-calibration-flights.md`? If not, is the recommender
+      that consumes it gated to `cli: []` until calibration lands?
+- [ ] For a style-sensitive threshold: does it read from `thresholdsFor(...)`
+      with `sport === today` rather than a file-scope constant? (Cross-ref
+      `wingtune-recommender` I9.)
 - [ ] Is the predicate exercised in the validate-parser corpus regression,
       including the `via` cross-check (the manifest's `signals_resolved:
       { id: { via: ... } }` must match what the resolver picks at runtime)?
 
 If any answer is "no" without a `// CONFIDENCE-EXCEPTION:` comment explaining
 why, the module isn't ready to ship. The CLI-without-confidence-scoring rule
-(line two of the self-check) admits no exceptions — implementation-detail
-exceptions are fine, but a module that emits CLI without a confidence score
-does not merge.
+(line four of the self-check) admits no exceptions — implementation-detail
+exceptions are fine, but a recommender that emits CLI without a confidence
+score does not merge.
