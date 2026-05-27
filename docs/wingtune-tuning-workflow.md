@@ -29,7 +29,12 @@ because that's the only way to know which change moved the needle.
   you're tuning (3D / aggressive vs relaxed cruiser); Sport is the
   neutral default and a behavioural no-op. It shifts the filter-delay,
   cross-axis-coupling and step-response bands the phases below lean on
-  — so a 3D wing is held to tighter delay and looser overshoot.
+  — so a 3D wing is held to tighter delay and looser overshoot. On
+  any log where the pilot-input style (Summary tab) disagrees with the
+  active profile, a non-binding hint appears on the dial: *"this log
+  looks flown 3D-style — switch profile?"*. The profile is your
+  declared intent — M-Pilot may suggest, never auto-apply; dismiss the
+  hint if you know what you're tuning toward.
 
 ---
 
@@ -90,6 +95,13 @@ collect a baseline log.
   specific items (PIDFS decomp · yaw, S-term yaw) are expected
   blocked on wings (yaw D isn't usually tuned; yaw axisS isn't
   written by USE_WING). That's wing-physics, not a bug.
+- **Summary tab → Pilot style** (M-Pilot). One-line read of HOW you
+  flew: small inputs, deliberate strokes, or frequent corrections.
+  On a *first sanity sortie* this should say something like "small,
+  infrequent inputs — flown calmly" (you weren't stress-testing).
+  Calibration sorties later (Phase 3, Phase 7, Phase 8) want
+  deliberate inputs and the panel should reflect that — if a Phase 3
+  log reads "calm" you didn't fly aggressive enough; redo it.
 - **Servos tab → ServoPanel:** verify every servo channel you wired
   shows a real PWM trace (not flat 1500). Saturation strip should be
   near 0% on a calm sortie.
@@ -182,6 +194,10 @@ naming for these terms.)
   F+S magnitudes, not both at non-trivial values). If the ribbon is
   still there with full F/S, the zero-out didn't take — re-check
   CLI + reflash.
+- **Summary tab → Pilot style** should read `3D` / `busy` or `3D` /
+  `active` — confirming you actually flew aggressively. A `cruise` /
+  `calm` verdict means the sortie was too gentle for Wiener
+  deconvolution to lock onto; redo with sharper inputs.
 - **Read PEAK + LATENCY per axis** from the header. These are your
   baseline PD response metrics.
 

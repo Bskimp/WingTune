@@ -15,9 +15,15 @@ don't re-litigate it later.
 
 ## Priority order
 
-> **Status (2026-05-21):** items 1 (M-FF), 2 (M-Coupling), 3
-> (M-FilterSim / Spectrum-roadmap S1), 4 (Spectrum-roadmap S2) and
-> 5 (M-Style) shipped. **M-Servo-2 is the next milestone.**
+> **Status (2026-05-22):** items 1 (M-FF), 2 (M-Coupling), 3
+> (M-FilterSim / Spectrum-roadmap S1), 4 (Spectrum-roadmap S2),
+> 5 (M-Style), 6 (M-Servo-2), 7 (M-Pilot) and 10 (Airspeed-binned
+> step response — slotted in as a discretionary slice 2026-05-19)
+> have all shipped. **Every buildable-now analytics-plan milestone
+> has shipped.** What remains is threshold calibration (gated on the
+> purpose-built sorties in `docs/wingtune-calibration-flights.md`),
+> the opportunistic Airspeed voltage-sag slice (#8), and the
+> research-deferred craft persistence work (#9).
 
 1. ~~**M-FF — Feedforward effectiveness + maneuver detection**~~ —
    ✅ **shipped** abff4fa (2026-05-19)
@@ -30,18 +36,27 @@ don't re-litigate it later.
    ✅ **shipped** 2026-05-21, see `docs/wingtune-s2-execution.md`
 5. ~~**M-Style — Tune-style profiles (the "style dial")**~~ —
    ✅ **shipped** 2026-05-21 (`c52ee74` + `f1d9030`), see
-   `docs/wingtune-m-style-execution.md`
-6. **M-Servo-2 — Servo hunt + airframe transfer function** ← **next**
-7. **M-Pilot — Pilot-input style analysis** — feeds M-Style's auto-detect
+   `docs/wingtune-m-style-execution.md`. Slice 4 (auto-suggest hook)
+   closed by M-Pilot Slice 3 (2026-05-22).
+6. ~~**M-Servo-2 — Servo hunt + airframe transfer function**~~ —
+   ✅ **shipped** 2026-05-21 (`0700b0c`..`6f350cc`), see
+   `docs/wingtune-m-servo-2-execution.md`
+7. ~~**M-Pilot — Pilot-input style analysis**~~ —
+   ✅ **shipped** 2026-05-22 (`39a1e91`), see
+   `docs/wingtune-m-pilot-execution.md`. Closed the deferred
+   M-Style Slice 4 along the way (non-binding profile auto-suggest
+   on `TuneProfileControl`).
 8. **Airspeed slice — voltage-sag ↔ fit-accuracy correlation** (small,
    folds into the existing Airspeed panel)
 9. **Craft persistence infrastructure** — needs its own design pass
    before any of the above can have a longitudinal-history feature
-10. **Airspeed-binned step response** — the one wing-regime spectral-
-   batch item NOT pulled into the Spectrum roadmap; it lives on the
-   Step tab, not Spectrum, and reuses `computeStepResponse` + the M3
-   airspeed estimate. (Airspeed×frequency spectrogram, low-frequency
-   airframe modes and the wavelet view became S2 above.)
+10. ~~**Airspeed-binned step response**~~ — ✅ **shipped** 2026-05-19
+   (slotted in as a discretionary slice off the analytics-plan
+   queue, alongside the I-term trim diagnostic that day). Lives on
+   the Step tab (`AirspeedStepResponsePanel`), reuses
+   `computeStepResponse` + the M3 airspeed estimate. The wavelet
+   scalogram (item 4's deferred sub-slice) is the one wing-regime
+   spectral-batch item still NOT shipped.
 
 **UX / infrastructure follow-ups** (not analytics — surfaced during
 M-FF, 2026-05-19):
@@ -158,7 +173,19 @@ When you pitch up, does yaw drift? = adverse yaw or bind.
 
 ---
 
-## M-Servo-2 — Servo hunt + airframe transfer function
+## M-Servo-2 — Servo hunt + airframe transfer function ✅ SHIPPED
+
+> ✅ Shipped 2026-05-21 (`0700b0c`..`6f350cc`):
+> `lib/transferFunction.ts` (Welch cross-spectral H(f) + coherence +
+> bandwidth estimator), `AirframeBandwidthPanel.vue` (per-axis Bode
+> plot, maneuver-window region selection with whole-flight fallback),
+> `lib/servoHunt.ts` (per-servo hunt score via 2-pole high-pass on
+> servo PWM vs same-band setpoint cross-correlation),
+> `ServoHuntPanel.vue` (worst-first row list). All four slices
+> diagnostic-only — no recommender, no CLI (servo hunt is bench-side;
+> airframe bandwidth is a physics ceiling). Execution detail in
+> `docs/wingtune-m-servo-2-execution.md`. The sketch below is the
+> original design intent.
 
 Extends the M-Servo suite (ServoPanel / InputChain / Asymmetry).
 
@@ -197,7 +224,17 @@ that physics won't deliver.
 
 ---
 
-## M-Pilot — Pilot-input style analysis
+## M-Pilot — Pilot-input style analysis ✅ SHIPPED
+
+> ✅ Shipped 2026-05-22 (`39a1e91`): `lib/pilotStyle.ts` (per-axis
+> activity / reversals / strokes via hysteresis zigzag + aggregate
+> roll+pitch verdict), `PilotStylePanel.vue` on the Summary tab
+> (under `SummaryTab.vue`), and the M-Style auto-suggest hook on
+> `TuneProfileControl.vue` — non-binding "this log looks flown 3D-
+> style — switch profile?" hint with `[switch]` / `[dismiss]`.
+> Closed the deferred M-Style Slice 4 along the way. Execution
+> detail in `docs/wingtune-m-pilot-execution.md`. The sketch below
+> is the original design intent.
 
 **Why:** distinguishes "wing is unstable + pilot is fighting it" from
 "wing is stable + pilot is aggressive" from "calm wing, calm pilot."
@@ -629,11 +666,20 @@ Recorded so we don't re-litigate.
 
 ## Sequencing note
 
-M-FF, M-Coupling, M-Servo-2, M-Pilot are all independent — none
-depends on another, so they can be picked up in any order (priority
-order above is by payoff). The Airspeed slice is opportunistic.
+M-FF, M-Coupling, M-Servo-2, M-Pilot were all independent — none
+depended on another, so they shipped in payoff-priority order
+(2026-05-19 through 2026-05-22). The Airspeed voltage-sag slice (#8)
+remains opportunistic — folds in next time the Airspeed panel is
+touched.
 
 Craft persistence is the one with a hard ordering constraint:
 **design the storage layer before building any longitudinal feature.**
 Until then, every analytic above is per-session, which is fine — they
 all work on a single dropped log.
+
+The post-analytics work is **threshold calibration** — every
+TODO-calibrate constant in the suite gets resolved by Brian's
+purpose-built sorties (`docs/wingtune-calibration-flights.md`) plus a
+follow-on pass to convert the first-guesses into measured numbers.
+Until those flights are flown, the suite is feature-complete on this
+plan's terms; no new analytics-plan milestone is queued.

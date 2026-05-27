@@ -15,13 +15,17 @@ The **Tune Profile dial** (Cruise / Sport / 3D) sits in the controls
 strip under the time bar — it reweights the recommendation and panel
 thresholds for your flying style: a 3D wing tolerates less filter
 delay and more overshoot than a relaxed cruiser. Default Sport is the
-neutral all-rounder.
+neutral all-rounder. When the loaded log's pilot-input style (see
+Summary tab) doesn't match the active profile, a non-binding hint
+appears: *"this log looks flown 3D-style — switch profile?"* with
+`[switch]` / `[dismiss]`. The profile is your declared intent —
+M-Pilot may suggest, never auto-apply.
 
 ---
 
 ## Summary
 
-The first-impression tab. **Three sections, top-to-bottom:**
+The first-impression tab. **Four sections, top-to-bottom:**
 
 1. **Entry / Hrs / Firmware / Size** — log metadata strip. Confirms you
    loaded what you thought you loaded.
@@ -35,15 +39,28 @@ The first-impression tab. **Three sections, top-to-bottom:**
    header (~150-250 entries). Searchable; click-to-copy a `set k = v`
    command to clipboard. Useful for verifying current config or pasting
    a chunk into a new build.
+4. **Pilot style · rcCommand** — characterises HOW the log was flown,
+   from the raw stick traces. Per-axis activity bar + reversal rate +
+   stroke p50/p90, plus an aggregate verdict (suggests Cruise / Sport /
+   3D from amplitude; flags calm / active / busy from reversal rate).
+   The gyro can't tell calm wing from busy pilot — the stick can. Roll
+   + pitch drive the verdict; yaw is reported per-axis but excluded.
+   Honest empty state when the log is < 3 s or the sticks barely moved.
+   Feeds the auto-suggest hint on the Tune Profile dial above.
 
-**What to use this tab for:** sanity-check before drilling in. If a tab
+**What to use this tab for:** sanity-check before drilling in. The
+pilot-style panel is the "what kind of flight am I looking at?" read —
+a busy verdict tells you the gyro chatter you'll see in Tracking is
+probably pilot-correction-driven, not airframe oscillation. If a tab
 you care about shows BLOCKED on Readiness, the panel will show an
 explanation — saves you opening it just to see "no data."
 
 **Caveats:** Readiness shows what CAN run, not whether the analytics
 will produce a USEFUL result. A green row on Airspeed BASIC fit just
 means GPS is present; whether the fit is reliable depends on flight
-content (Recommend's confidence gate handles that).
+content (Recommend's confidence gate handles that). Pilot-style
+thresholds are wing-regime first guesses — the verdict only ever
+*suggests*; calibration TODO against the corpus.
 
 ---
 

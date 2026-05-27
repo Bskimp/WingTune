@@ -24,6 +24,11 @@ Long-form documents and reference snapshots for WingTune. Skills under
 - [wingtune-calibration-flights.md](wingtune-calibration-flights.md) — the
   purpose-built sorties that turn the tool's first-guess thresholds into
   calibrated values.
+- [wingtune-skills-audit-plan.md](wingtune-skills-audit-plan.md) — execution
+  plan for the periodic skills-audit pass (rules in `.claude/skills/` vs
+  patterns that actually accreted in code). Frozen historical record of the
+  2026-05-23 audit shape; re-use as a template when the next audit pass
+  becomes due.
 
 `CLAUDE.md` at the repo root is the authoritative live state-of-the-project
 doc — these are the reasoning behind it.

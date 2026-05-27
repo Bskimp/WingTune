@@ -1,5 +1,19 @@
 # Wing fields blackbox promotion — patch notes
 
+> **STATUS: frozen planning artifact (captured 2026-05-15).** This is
+> the working notes for a hand-aligned firmware patch against a specific
+> Betaflight `master` SHA at the time of capture. **It has not been
+> applied or submitted.** Brian's `betaflight-wing-msp` fork shipped a
+> related-but-different set of main-frame wing fields under different
+> names (`wingTpaFactor` / `wingSpa` / `wingSetpointAdj` /
+> `wingSTermPost` rather than the `tpaSpeedEst` / `spa` / `setpointAdj`
+> / `axisSpreTpa` proposed below). The patch is effectively superseded
+> for production use, but the notes — especially the verbatim `axisS`
+> precedent and the per-file walkthrough — remain useful as a reference
+> for any future blackbox-fields PR. Do NOT apply this patch against
+> current `master` without revalidating every line ref + reconciling
+> the field-naming divergence.
+
 Target: **Bskimp/betaflight** `master` (just synced from upstream).
 Release target: **Betaflight 2026.6**.
 Patch file: `wing-fields-firmware.patch` (same directory).
