@@ -43,13 +43,21 @@ Two directories, with very different rules:
 - Every file here has been through the scrubbing checklist below
 - Every file here has a manifest entry with `gps_present` documented
 
+Current state: the directory is structurally present (manifest + README +
+.gitkeep) but **unpopulated** — the public corpus has zero `.bbl` files
+today. Every regression log lives in the private corpus. This is fine; the
+public corpus exists as the scrubbed-and-shareable destination for any
+private log that's earned a public-corpus promotion.
+
 ### `tests/corpus-private/` — personal, gitignored
 
 - Contents: unscrubbed personal regression `.bbl` files
-- Listed in `.gitignore`; never committed
-- `validate-parser --manifest tests/corpus-private/manifest.yaml` works the
-  same way as the public one — useful for local regression against real
-  flights without the scrubbing overhead
+- Listed in `.gitignore` (`tests/corpus-private/`); never committed
+- `npm run corpus:validate:private` validates the private manifest;
+  `npm run corpus:validate` validates the public one — same harness, two
+  manifest paths
+- Current state: 7 logs (4 limonspb PR #13895 reference logs +
+  3 of Brian's USE_WING real-flight logs)
 - If a private log later proves useful as a public corpus entry, scrub it
   (see below) and move it; never shortcut by relaxing the public rules
 
@@ -97,42 +105,68 @@ gets a scrubbing pass before merging.
 
 ## Manifest contract
 
-`tests/corpus/manifest.yaml` is the source of truth for what each public log
-is for and what has been scrubbed. Every entry includes:
+`tests/corpus/manifest.yaml` (and the private equivalent) is the source of
+truth for what each log is for and what has been scrubbed. Current entry
+shape (matches the private manifest in-tree as of M-Pilot):
 
 ```yaml
-- file: basic-wing-4.6.bbl
-  class: basic-wing
-  firmware: betaflight/4.6.0
-  debug_mode: none
-  gps_present: false
-  # Required when gps_present: true:
-  # gps_location_class: public_field | stripped | cropped | synthetic
-  expected:
-    decodes: true
-    fields_required: [gyroADC, setpoint, servo, motor]
-    modules_runnable: [M1]
+logs:
+  - file: black_basic.bbl
+    class: airspeed-calibration         # free-form bucket: basic-wing | airspeed-calibration | …
+    firmware: Betaflight 4.6.0
+    debug_mode: TPA
+    gps_present: true
+    # Required when gps_present: true:
+    gps_location_class: public_field    # public_field | stripped | cropped | synthetic
+    expected:
+      fields_present:
+        - gyroADC[0]
+        - gyroADC[1]
+        - gyroADC[2]
+        - debug[0]
+        - debug[3]
+        - debug[4]
+        - debug[5]
+        - rcCommand[3]
 ```
 
-The `expected` block is what `validate-parser` checks against. The hygiene
-fields (`gps_present`, `gps_location_class`) are what corpus PR reviewers
-check against. Both matter; one without the other is not enough.
+`expected.fields_present` is what `validate-parser` checks against (the
+manifest asserts which fields the scan reports as present; CI fails if
+the parser regresses on field discovery). The hygiene fields
+(`gps_present`, `gps_location_class`) are what corpus PR reviewers check
+against. Both matter; one without the other is not enough.
 
-## The bundled sample log
+When a future module-runnable cross-check lands (the historical
+`modules_runnable: [...]` idea), it goes under the same `expected:`
+block — but until then, don't fabricate fields the harness doesn't
+actually consume.
 
-The first-run sample log ships with every install. It has the highest
-exposure of any log in the project and gets a separate, paranoid review.
+## The bundled sample log (policy when it lands)
 
-Rules for the bundled sample log specifically:
+There is **no bundled sample log today.** The Tauri shell uses native
+file open (`pickAndOpenLogFile()`) and the web demo expects a file drop
+— neither ships a starter `.bbl`. `.gitignore` reserves
+`public/samples/wing-sample.bbl` as the build-artifact slot copied from
+a corpus entry tagged `bundled: true`, but no entry has earned that tag
+yet.
+
+These are the rules **for when a bundled sample lands**, written ahead
+of time so the gate doesn't get re-litigated under pressure:
 
 - Must be `gps_present: false` OR `gps_location_class: synthetic`. **No
-  cropped or stripped real-flight GPS is acceptable here** — too many edge
-  cases for paranoid comfort.
+  cropped or stripped real-flight GPS is acceptable here** — too many
+  edge cases for paranoid comfort. The bundled sample is the
+  highest-exposure log in the project and gets the strictest gate.
 - Must be flagged in the manifest with `bundled: true`.
-- Any change to the bundled sample log requires a separate scrubbing review
-  before merge, even if the rest of the corpus change is routine.
-- If the bundled sample log changes, the corpus PR description must
-  explicitly call out the change and confirm a fresh scrubbing review.
+- Any change to the bundled sample log requires a separate scrubbing
+  review before merge, even if the rest of the corpus change is routine.
+- If the bundled sample log changes, the commit message / PR description
+  must explicitly call out the change and confirm a fresh scrubbing
+  review.
+
+Until then, don't introduce a bundled sample in a drive-by commit — pick
+or build one against these rules first, write the manifest entry, then
+flip the `.gitignore`.
 
 ## When adding or changing a log
 
@@ -177,16 +211,22 @@ Don't approve the corpus change implicitly because the code looks fine.
 
 ## Quick self-check before committing a corpus change
 
-- [ ] Is every new `.bbl` file located in either `tests/corpus/` (scrubbed)
-      or `tests/corpus-private/` (gitignored)? Nothing in between, nothing at
-      the repo root.
-- [ ] For each public `.bbl`: has the scrubbing checklist been run? Header
-      inspector reviewed?
+- [ ] Is every new `.bbl` file located in either `tests/corpus/`
+      (scrubbed) or `tests/corpus-private/` (gitignored)? Nothing in
+      between, nothing at the repo root, no `examples/` or `samples/`
+      escape hatch.
+- [ ] For each public `.bbl`: has the scrubbing checklist been run?
+      Header inspector reviewed?
+- [ ] Manifest entry uses the current shape: `expected.fields_present`
+      (not the historical `fields_required` / `decodes` / `modules_runnable`)?
 - [ ] Has the manifest been updated with accurate `gps_present` and (if
       applicable) `gps_location_class`?
-- [ ] If the bundled sample log changed: has the separate paranoid review
-      happened?
-- [ ] Does `npm run corpus:validate` pass?
+- [ ] If a bundled sample is being introduced (still not present today):
+      has the paranoid-gate checklist been run? `bundled: true` flag
+      set? `.gitignore` slot freed?
+- [ ] Does `npm run corpus:validate` (public) or
+      `npm run corpus:validate:private` pass for whichever manifest was
+      touched?
 
 ## No exceptions
 
